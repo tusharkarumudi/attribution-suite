@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "attribution-suite: unified CLI over the attribution toolchain"
+message: "If you use this software or the method it implements, please cite it."
+type: software
+authors:
+  - family-names: Karumudi
+    # Add your ORCID before release; it makes the work
+    # machine-linkable to you across citation systems.
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+    given-names: Tushar
+repository-code: "https://github.com/tusharkarumudi/attribution-suite"
+abstract: >-
+  Meta-package providing a single install and a single command-line interface
+  over attribution-graph, paytrace and handle-correlation. Runs the full
+  chain from one case file: import from SpiderFoot and OpenCTI, collect from
+  registries and ad-tech supply-chain sources, apply planted-identifier checks,
+  score and resolve, verify the evidence package, and report.
+keywords:
+  - open source intelligence
+  - entity resolution
+  - record linkage
+  - attribution
+  - threat intelligence
+license: Apache-2.0
+version: 2.0.0
