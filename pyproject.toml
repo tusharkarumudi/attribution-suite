@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "attribution-suite"
+version = "2.0.2"
+description = "One install and one CLI over the attribution-graph toolchain"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Tushar Karumudi" }]
+keywords = ["osint", "attribution", "threat-intelligence", "entity-resolution"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Information Technology",
+  "Topic :: Security",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "attribution-graph>=2.0.1,<2.1",
+  "paytrace>=2.0.1,<2.1",
+  "handle-correlation>=2.0.1,<2.1",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+llm = ["anthropic>=0.40"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6"]
+
+[project.scripts]
+attribution-mcp = "attribution_suite.mcp_server:main"
+attribution = "attribution_suite.cli:_cli"
+attribution-suite = "attribution_suite.cli:_suite_cli"
+
+[project.urls]
+Homepage = "https://github.com/tusharkarumudi/attribution-suite"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/attribution_suite"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["B008", "UP017"]
+
+[tool.pytest.ini_options]
+# Explicit taxonomy. A developer should not need implicit environmental
+# knowledge to make `pytest` green: network and browser tests fail on a
+# machine without DNS or Chromium, and that is an environment fact rather
+# than a defect.
+#
+#   pytest                      # deterministic subset, the release gate
+#   pytest -m network           # needs outbound DNS/HTTP
+#   pytest -m browser           # needs a headless browser
+testpaths = ["tests"]
+markers = [
+    "network: requires outbound network access",
+    "browser: requires a headless browser (playwright/chromium)",
+    "integration: spans more than one package",
+    "adversarial: injection, obfuscation and SSRF regressions",
+    "slow: takes more than a second",
+]
+addopts = "-m 'not network and not browser'"

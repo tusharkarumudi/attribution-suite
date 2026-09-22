@@ -1,0 +1,27 @@
+# Drives the whole chain. attribution run --case this.yaml
+case_ref: SCRAPE-2026-0417
+authorization: "IR ticket SEC-88213 / preservation request 2026-08-02"
+contact_email: "threatintel@example.com"
+
+seeds:
+  - domain:scraper-site.example
+  - seller_id:pubmatic.com/156423
+
+pivot_radius: 3
+entity_types_allowed: [Company]
+jurisdictions: [US, EU, IN]
+
+# respect | record | ignore. Whichever you pick is written into the evidence
+# manifest and the declaration draft, so the run can state its own policy.
+robots_policy: record
+
+minimize: true
+retention_days: 180
+
+budget:
+  max_requests: 4000
+  max_nodes: 15000
+  max_runtime_s: 1800
+
+# Inside the case output, which is created 0700.
+audit_path: ./out/audit.jsonl
