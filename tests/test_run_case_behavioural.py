@@ -405,3 +405,52 @@ def test_findings_name_the_seed_when_nothing_resolved(capsys):
     }))
     out = capsys.readouterr().out
     assert "nothing resolved about x.example" in out
+
+
+def test_the_payee_name_is_reachable_through_the_chain(capsys):
+    """The answer is domain -> seller_id -> org_name. Keeping only links that
+    name the seed filed the payee itself under "other links"."""
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("pictame.com", {
+        ("domain:pictame.com", "seller_id:google.com/pub-383"):
+            _assessment(5, "MODERATE_EVIDENCE", 1, [("ads_txt|pictame.com", 5.4)]),
+        ("seller_id:google.com/pub-383", "org_name:Some Media Ltd"):
+            _assessment(8, "STRONG_EVIDENCE", 1,
+                        [("sellers_json|google.com|pub-383", 8.0)]),
+        ("company_number:IE/462932", "lei:635400IRY"):
+            _assessment(14, "MODERATE_EVIDENCE", 1, [("gleif|x", 14.0)]),
+    }))
+    out = capsys.readouterr().out
+    assert "org_name:Some Media Ltd" in out, "the payee must be shown"
+    assert "lei:635400IRY" not in out, "unrelated registry links must stay counted"
+
+
+def test_a_registry_lookup_is_not_corroboration_of_the_relationship(capsys):
+    """EDGAR confirms the company exists; it says nothing about who runs the
+    site. Counting it as an independent group turned "the terms page names
+    Meta" into STRONG_EVIDENCE that Meta operates the site."""
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("pictame.com", {
+        ("cik:0001326801", "domain:pictame.com"):
+            _assessment(9, "STRONG_EVIDENCE", 2,
+                        [("imprint|pictame.com|/terms", 8.0),
+                         ("edgar|0001326801", 8.0)]),
+    }))
+    out = capsys.readouterr().out
+    assert "self-published" in out
+    assert "corroborate the entity, not the relationship" in out
+
+
+def test_a_genuinely_corroborated_link_is_not_labelled(capsys):
+    """Two independent groups that BOTH reference the seed is real support."""
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("x.example", {
+        ("domain:x.example", "seller_id:adnet.example/1"):
+            _assessment(8, "STRONG_EVIDENCE", 2,
+                        [("ads_txt|x.example", 8.0),
+                         ("wayback_ads|x.example|202501", 8.0)]),
+    }))
+    assert "self-published" not in capsys.readouterr().out

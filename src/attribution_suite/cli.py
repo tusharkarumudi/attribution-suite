@@ -102,6 +102,7 @@ def _incomplete_reason(stats: dict, scope) -> str:
 _SELF_PUBLISHED = ("imprint|", "dns_txt|", "ownerdomain|", "surface|")
 
 
+
 def _seed_of(res) -> str:
     """The domain the question was about."""
     for seed in getattr(res.scope, "seeds", ()) or ():
@@ -111,15 +112,35 @@ def _seed_of(res) -> str:
     return ""
 
 
-def _about(seed: str, subject: str, obj: str) -> bool:
-    return bool(seed) and (seed in subject or seed in obj)
+def _reachable(seed: str, assessments) -> set:
+    """Nodes on the chain from the seed, following two hops.
+
+    One hop is not enough: the answer to "who operates this site" is
+    domain -> seller_id -> org_name, so keeping only links that name the seed
+    hides the payee itself.
+    """
+    nodes = {n for pair in assessments for n in pair if seed and seed in n}
+    for _ in range(2):
+        nodes |= {n for pair in assessments if nodes & set(pair) for n in pair}
+    return nodes
 
 
-def _sources(assessment) -> set:
-    out = set()
+def _seed_groups_are_self_published(seed: str, assessment) -> bool:
+    """True when nothing independent connects THE SEED to the other side.
+
+    A registry lookup of a name found on the subject's own page corroborates
+    that the company exists, not that it operates the site. Counting it as
+    independent support turned "the terms page names Meta" into
+    STRONG_EVIDENCE that Meta operates the site.
+    """
+    groups = [g for g in _groups(assessment) if seed and seed in g]
+    return bool(groups) and all(g.startswith(_SELF_PUBLISHED) for g in groups)
+
+
+def _groups(assessment) -> list:
+    out = []
     for item in getattr(assessment, "top_evidence", ()) or ():
-        group = item[0] if isinstance(item, (tuple, list)) else str(item)
-        out.add(str(group).split("|")[0] + "|")
+        out.append(str(item[0] if isinstance(item, (tuple, list)) else item))
     return out
 
 
@@ -143,7 +164,8 @@ def _print_findings(res, show_person: bool = False) -> None:
               "not a failure)")
         return
 
-    mine = {k: v for k, v in assessments.items() if _about(seed, k[0], k[1])}
+    chain = _reachable(seed, assessments)
+    mine = {k: v for k, v in assessments.items() if chain & set(k)}
     other = {k: v for k, v in assessments.items() if k not in mine}
 
     if not mine:
@@ -152,8 +174,9 @@ def _print_findings(res, show_person: bool = False) -> None:
                                     reverse=True)[:6]:
         print(f"  {_mask(subject, show_person)}  ->  {_mask(obj, show_person)}")
         note = ""
-        if _sources(a) and _sources(a) <= set(_SELF_PUBLISHED):
-            note = "  [self-published: the site says so; no independent source]"
+        if _seed_groups_are_self_published(seed, a):
+            note = ("  [self-published: only the site's own pages link it here; "
+                    "the other groups corroborate the entity, not the relationship]")
         print(f"      {a.band.value}  ({a.estimative}) — "
               f"{a.independent_groups} independent evidence group(s){note}")
         for line in list(a.top_evidence)[:3]:

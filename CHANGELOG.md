@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-09-23
+
+- Findings follow the chain two hops, so the payee name appears. The answer is
+  domain -> seller_id -> org_name, and keeping only links that named the seed
+  filed the payee itself under "other links".
+- A link is labelled `[self-published]` when nothing INDEPENDENT connects the
+  seed to the other side. A registry lookup of a name found on the subject's own
+  page corroborates that the company exists, not that it operates the site —
+  previously that counted as independent support, so "the terms page names Meta"
+  was presented as STRONG_EVIDENCE that Meta operates the site.
+
 ## [2.0.4] - 2026-09-23
 
 - Findings are now about the domain that was asked about. Every assessment in
