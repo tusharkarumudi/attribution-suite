@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-09-23
+
+- Findings are now about the domain that was asked about. Every assessment in
+  the graph was ranked together and the top five printed, so a run about one
+  site reported links between unrelated third parties and never named the
+  site's own payee. Links not involving the seed are counted, not listed.
+- A link supported only by the subject's own pages is labelled
+  `[self-published]`. An Instagram viewer's terms page names Meta, and that
+  mention was being presented as STRONG_EVIDENCE that Meta operates the site.
+
 ## [2.0.3] - 2026-09-23
 
 - The INCOMPLETE exit message now names what actually stopped the run. Four

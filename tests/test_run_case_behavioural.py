@@ -335,3 +335,73 @@ def test_incomplete_never_invents_a_cause():
     from attribution_suite.cli import _incomplete_reason
 
     assert _incomplete_reason({}, _Scope()) == "the search did not run to completion"
+
+
+# ---- findings must answer the question that was asked ---------------------- #
+
+from types import SimpleNamespace as _NS  # noqa: E402
+
+
+def _assessment(log_odds, band, groups, evidence):
+    return _NS(log_odds=log_odds, band=_NS(value=band), estimative="e",
+               independent_groups=groups, top_evidence=evidence)
+
+
+def _result(seed, assessments):
+    return _NS(scope=_NS(seeds=[f"domain:{seed}"]),
+               resolution=_NS(assessments=assessments))
+
+
+def test_findings_are_about_the_domain_that_was_asked(capsys):
+    """A run about one site reported links between unrelated third parties:
+    every assessment in the graph was ranked together and the top five printed,
+    so GLEIF cross-references outranked the site's own payee."""
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("pictame.com", {
+        ("domain:pictame.com", "seller_id:adnet.example/99"):
+            _assessment(5, "MODERATE_EVIDENCE", 2, [("ads_txt|pictame.com", 8.0)]),
+        ("company_number:IE/462932", "lei:635400IRYI5QC7GUYI75"):
+            _assessment(14, "MODERATE_EVIDENCE", 1, [("gleif|x", 14.0)]),
+    }))
+    out = capsys.readouterr().out
+    assert "seller_id:adnet.example/99" in out, "the seed's own payee must appear"
+    assert "lei:635400IRYI5QC7GUYI75" not in out, "third-party links must not be paraded"
+    assert "1 further link(s)" in out, "but they must still be counted"
+
+
+def test_a_self_published_claim_is_labelled(capsys):
+    """An Instagram viewer's terms page names Meta, and that mention scored
+    STRONG_EVIDENCE — presented without qualification it reads as an
+    attribution of a real company."""
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("pictame.com", {
+        ("cik:0001326801", "domain:pictame.com"):
+            _assessment(9, "STRONG_EVIDENCE", 2,
+                        [("imprint|pictame.com|/terms", 8.0)]),
+    }))
+    out = capsys.readouterr().out
+    assert "self-published" in out
+
+
+def test_independently_sourced_claims_are_not_labelled(capsys):
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("x.example", {
+        ("domain:x.example", "seller_id:adnet.example/1"):
+            _assessment(8, "STRONG_EVIDENCE", 2,
+                        [("sellers_json|adnet.example|1", 8.0),
+                         ("wayback_ads|x.example|202501", 8.0)]),
+    }))
+    assert "self-published" not in capsys.readouterr().out
+
+
+def test_findings_name_the_seed_when_nothing_resolved(capsys):
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("x.example", {
+        ("a:1", "b:2"): _assessment(3, "WEAK", 1, [("g|1", 3.0)]),
+    }))
+    out = capsys.readouterr().out
+    assert "nothing resolved about x.example" in out

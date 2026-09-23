@@ -96,26 +96,77 @@ def _incomplete_reason(stats: dict, scope) -> str:
     return "; ".join(why) or "the search did not run to completion"
 
 
+#: Evidence groups that are the subject's own statements about itself. A page
+#: naming a company proves the page names it, nothing more -- and an Instagram
+#: viewer's terms page names Meta.
+_SELF_PUBLISHED = ("imprint|", "dns_txt|", "ownerdomain|", "surface|")
+
+
+def _seed_of(res) -> str:
+    """The domain the question was about."""
+    for seed in getattr(res.scope, "seeds", ()) or ():
+        text = str(seed)
+        if text.startswith("domain:"):
+            return text.split(":", 1)[1]
+    return ""
+
+
+def _about(seed: str, subject: str, obj: str) -> bool:
+    return bool(seed) and (seed in subject or seed in obj)
+
+
+def _sources(assessment) -> set:
+    out = set()
+    for item in getattr(assessment, "top_evidence", ()) or ():
+        group = item[0] if isinstance(item, (tuple, list)) else str(item)
+        out.add(str(group).split("|")[0] + "|")
+    return out
+
+
 def _print_findings(res, show_person: bool = False) -> None:
-    """The point of the one-command form: show the chain, not just counts."""
+    """Answer the question that was asked, about the domain that was asked.
+
+    This ranked every assessment in the graph and printed the top five, so a
+    run about one site reported links between unrelated third parties, and a
+    company merely NAMED on the site's terms page could outrank the site's own
+    payee. Findings about the seed come first; everything else is counted, not
+    paraded.
+    """
     resolution = getattr(res, "resolution", None)
     assessments = dict(getattr(resolution, "assessments", {}) or {})
-    print("\nFINDINGS")
+    seed = _seed_of(res)
+
+    print(f"\nFINDINGS — {seed or 'this case'}")
     if not assessments:
         print("  no entity resolved above threshold")
         print("  (a site with no ads.txt publishes no payee; that is a result, "
               "not a failure)")
         return
-    ranked = sorted(assessments.items(), key=lambda kv: kv[1].log_odds, reverse=True)
-    for (subject, obj), a in ranked[:5]:
+
+    mine = {k: v for k, v in assessments.items() if _about(seed, k[0], k[1])}
+    other = {k: v for k, v in assessments.items() if k not in mine}
+
+    if not mine:
+        print(f"  nothing resolved about {seed or 'the seed'} above threshold.")
+    for (subject, obj), a in sorted(mine.items(), key=lambda kv: kv[1].log_odds,
+                                    reverse=True)[:6]:
         print(f"  {_mask(subject, show_person)}  ->  {_mask(obj, show_person)}")
+        note = ""
+        if _sources(a) and _sources(a) <= set(_SELF_PUBLISHED):
+            note = "  [self-published: the site says so; no independent source]"
         print(f"      {a.band.value}  ({a.estimative}) — "
-              f"{a.independent_groups} independent evidence group(s)")
+              f"{a.independent_groups} independent evidence group(s){note}")
         for line in list(a.top_evidence)[:3]:
             print(f"        - {line}")
+
+    if other:
+        print(f"\n  {len(other)} further link(s) between third parties, not about "
+              f"{seed or 'the seed'} — see attribution_report.md")
+
     print("\n  Bands order evidence strength. They are not probabilities, and a "
           "conclusion\n  about a person is a lead until a statutory register "
           "confirms it.")
+
 
 
 def _run(a: argparse.Namespace) -> int:
