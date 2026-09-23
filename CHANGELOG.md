@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [2.0.10] - 2026-09-23
+
+- A finding supported by one evidence group now reads UNCORROBORATED rather
+  than UNSUPPORTED ("contradicted or unsupported"). A site's own ads.txt entry
+  is not contradicted; it is simply not corroborated yet, and the stronger word
+  made every finding look like nothing had been found.
+- Completed checks that found nothing are listed separately from blocked
+  retrievals and do not make a result incomplete.
+
 ## [2.0.9] - 2026-09-23
 
 - Blocked retrievals now name the URL, not just the count. Two runs of the same

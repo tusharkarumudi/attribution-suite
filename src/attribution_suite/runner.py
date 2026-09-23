@@ -115,6 +115,17 @@ def run_case(
     # fetch policy or a size cap stopped everything reported "no entity
     # resolved above threshold" -- indistinguishable from an honest negative,
     # which is the worst way for a collection failure to present.
+    def _report_absent() -> None:
+        """Checks that COMPLETED and found nothing. Distinct from blocked."""
+        absent = list(getattr(fetcher, "checked_absent", ()) or ())
+        if not absent:
+            return
+        warnings.append(
+            f"{len(absent)} retrieval(s) completed and found nothing (checked, "
+            "not blocked):")
+        for url, why in absent[:5]:
+            warnings.append(f"    checked: {url} — {why}")
+
     def _report_blocked() -> None:
         if not fetcher.blocked:
             return
@@ -265,6 +276,10 @@ def run_case(
             f"{len(blocked)} retrieval(s) were blocked by policy or URL "
             "safety. The result is INCOMPLETE: an absence in this report may "
             "mean 'could not be checked' rather than 'checked and not found'.")
+
+    # Completed checks that found nothing: reported, but they do NOT make the
+    # result incomplete.
+    _report_absent()
 
     if getattr(engine, "budget_exhausted", False):
         stats["budget_exhausted"] = True

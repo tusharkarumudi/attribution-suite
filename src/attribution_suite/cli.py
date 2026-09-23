@@ -157,6 +157,19 @@ def _groups(assessment) -> list:
     return out
 
 
+def _band_label(a) -> str:
+    """UNSUPPORTED means "contradicted or unsupported", which reads as though
+    the claim was refuted. For a single authoritative source that is wrong: the
+    site's own ads.txt entry is not contradicted, it is simply not corroborated
+    yet. Conflating the two is the error this toolkit exists to avoid.
+    """
+    band = a.band.value
+    if band == "UNSUPPORTED" and getattr(a, "independent_groups", 0) >= 1:
+        return ("UNCORROBORATED  (one evidence group; not contradicted, "
+                "not yet corroborated)")
+    return f"{band}  ({a.estimative})"
+
+
 def _print_findings(res, show_person: bool = False) -> None:
     """Answer the question that was asked, about the domain that was asked.
 
@@ -188,7 +201,7 @@ def _print_findings(res, show_person: bool = False) -> None:
                 note = ("  [self-published: only the site's own pages link it "
                         "here; the other groups corroborate the entity, not the "
                         "relationship]")
-            print(f"      {a.band.value}  ({a.estimative}) — "
+            print(f"      {_band_label(a)} — "
                   f"{a.independent_groups} independent evidence group(s){note}")
             for line in list(a.top_evidence)[:3]:
                 print(f"        - {line}")

@@ -558,3 +558,25 @@ def test_blocked_urls_are_named_not_just_counted(monkeypatch, tmp_path):
     if res.stats.get("collection_blocked"):
         assert blocked, "a blocked retrieval must name its URL"
         assert any("http" in w for w in blocked)
+
+
+def test_a_single_source_is_uncorroborated_not_contradicted(capsys):
+    """UNSUPPORTED reads as "we refuted this". For a site's own ads.txt entry —
+    one authoritative source, not yet corroborated — that is wrong, and it made
+    every finding about a seed look like nothing had been found."""
+    from attribution_suite.cli import _band_label, _print_findings
+
+    a = _assessment(5.4, "UNSUPPORTED", 1, [("ads_txt|x.example", 5.4)])
+    assert "UNCORROBORATED" in _band_label(a)
+    assert "not contradicted" in _band_label(a)
+
+    _print_findings(_result("x.example", {
+        ("domain:x.example", "seller_id:adnet.example/1"): a}))
+    assert "UNCORROBORATED" in capsys.readouterr().out
+
+
+def test_zero_groups_is_still_unsupported():
+    """Nothing supporting it at all must keep the stronger word."""
+    from attribution_suite.cli import _band_label
+
+    assert _band_label(_assessment(0, "UNSUPPORTED", 0, [])).startswith("UNSUPPORTED")
