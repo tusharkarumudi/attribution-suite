@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-09-23
+
+- The INCOMPLETE exit message now names what actually stopped the run. Four
+  conditions set a result incomplete — blocked retrievals, the request budget,
+  the wall-clock budget, the node budget — and all four reported "a budget
+  stopped the search". A run halted by robots.txt sent the reader looking for a
+  limit to raise when nothing had been near one.
+
 ## [2.0.2] - 2026-09-22
 
 - New: `attribution-suite --domain example.com` runs the whole chain from one

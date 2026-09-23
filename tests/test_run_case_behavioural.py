@@ -296,3 +296,42 @@ def test_personal_identifiers_are_masked_in_the_on_screen_summary():
     assert _mask("email:someone@example.com", False).startswith("email:[withheld")
     assert _mask("email:someone@example.com", True) == "email:someone@example.com"
     assert _mask("domain:example.com", False) == "domain:example.com"
+
+
+# ---- INCOMPLETE must say what actually stopped it -------------------------- #
+
+class _Scope:
+    max_requests = 200
+
+
+def test_incomplete_names_blocking_not_a_budget():
+    """A run blocked by robots.txt reported "a budget stopped the search",
+    sending the reader to raise a limit that was never reached — the real run
+    made 41 requests against a ceiling of 200."""
+    from attribution_suite.cli import _incomplete_reason
+
+    reason = _incomplete_reason({"collection_blocked": 5}, _Scope())
+    assert "blocked" in reason and "budget" not in reason
+
+
+def test_incomplete_names_the_budget_when_it_was_the_budget():
+    from attribution_suite.cli import _incomplete_reason
+
+    reason = _incomplete_reason({"budget_exhausted": True}, _Scope())
+    assert "request budget (200)" in reason
+
+
+def test_incomplete_reports_every_cause_that_applied():
+    from attribution_suite.cli import _incomplete_reason
+
+    reason = _incomplete_reason(
+        {"collection_blocked": 2, "budget_exhausted": True,
+         "runtime_exhausted": True, "nodes_truncated": True}, _Scope())
+    for expected in ("blocked", "request budget", "wall-clock", "node budget"):
+        assert expected in reason
+
+
+def test_incomplete_never_invents_a_cause():
+    from attribution_suite.cli import _incomplete_reason
+
+    assert _incomplete_reason({}, _Scope()) == "the search did not run to completion"

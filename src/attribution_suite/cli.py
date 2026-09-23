@@ -74,6 +74,28 @@ def _mask(value: str, show_person: bool) -> str:
     return value
 
 
+def _incomplete_reason(stats: dict, scope) -> str:
+    """Why a run is INCOMPLETE, from what actually happened.
+
+    Four different conditions set ``result_complete`` False. The exit message
+    reported "a budget stopped the search" for every one of them, so a run
+    halted by robots.txt sent the reader hunting for a limit to raise when
+    nothing had been near a limit.
+    """
+    why = []
+    blocked = stats.get("collection_blocked")
+    if blocked:
+        why.append(f"{blocked} retrieval(s) were blocked by fetch policy or "
+                   "URL safety (robots.txt, a size cap, or a refused host)")
+    if stats.get("budget_exhausted"):
+        why.append(f"the request budget ({scope.max_requests}) was reached")
+    if stats.get("runtime_exhausted"):
+        why.append("the wall-clock budget was reached")
+    if stats.get("nodes_truncated"):
+        why.append("the node budget stopped frontier expansion")
+    return "; ".join(why) or "the search did not run to completion"
+
+
 def _print_findings(res, show_person: bool = False) -> None:
     """The point of the one-command form: show the chain, not just counts."""
     resolution = getattr(res, "resolution", None)
@@ -180,9 +202,11 @@ def _run(a: argparse.Namespace) -> int:
         print("\nEXIT 1 — evidence package failed verification.", file=sys.stderr)
         return 1
     if res.stats.get("result_complete") is False:
-        print("\nEXIT 3 — RESULT INCOMPLETE: a budget stopped the search. "
-              "Everything collected is sound; there is less of it than an "
-              "unbudgeted run would have produced.", file=sys.stderr)
+        reason = _incomplete_reason(res.stats, res.scope)
+        print(f"\nEXIT 3 — RESULT INCOMPLETE: {reason}. Everything collected is "
+              "sound; there is less of it than an unrestricted run would have "
+              "produced. An absence here may mean 'could not be checked' rather "
+              "than 'checked and not found'.", file=sys.stderr)
         return 3
     return 0
 
