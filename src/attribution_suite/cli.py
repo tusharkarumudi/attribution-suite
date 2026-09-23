@@ -112,17 +112,30 @@ def _seed_of(res) -> str:
     return ""
 
 
-def _reachable(seed: str, assessments) -> set:
-    """Nodes on the chain from the seed, following two hops.
+#: Identifier kinds that name a party. A second hop is worth showing only when
+#: it reaches one of these -- seller-to-seller pairs are peers sharing an ad
+#: system, not a step toward whoever is paid.
+_ENTITY_KINDS = ("org_name:", "company_number:", "cik:", "lei:", "person_name:",
+                 "email:", "address:")
 
-    One hop is not enough: the answer to "who operates this site" is
-    domain -> seller_id -> org_name, so keeping only links that name the seed
-    hides the payee itself.
+
+def _tiers(seed: str, assessments):
+    """Split into: about the seed, one hop further to a named party, the rest.
+
+    Ranking both hops together by score put seller-to-seller pairs (8.0) above
+    the site's own ads.txt declarations (5.4), so widening the search pushed the
+    seed's own findings off the list entirely. Distance from the seed orders
+    this, not score.
     """
-    nodes = {n for pair in assessments for n in pair if seed and seed in n}
-    for _ in range(2):
-        nodes |= {n for pair in assessments if nodes & set(pair) for n in pair}
-    return nodes
+    direct = {k: v for k, v in assessments.items()
+              if seed and any(seed in side for side in k)}
+    nodes = {side for k in direct for side in k}
+    onward = {k: v for k, v in assessments.items()
+              if k not in direct and nodes & set(k)
+              and any(side.startswith(_ENTITY_KINDS) for side in k)}
+    rest = {k: v for k, v in assessments.items()
+            if k not in direct and k not in onward}
+    return direct, onward, rest
 
 
 def _seed_groups_are_self_published(seed: str, assessment) -> bool:
@@ -164,24 +177,29 @@ def _print_findings(res, show_person: bool = False) -> None:
               "not a failure)")
         return
 
-    chain = _reachable(seed, assessments)
-    mine = {k: v for k, v in assessments.items() if chain & set(k)}
-    other = {k: v for k, v in assessments.items() if k not in mine}
+    direct, onward, rest = _tiers(seed, assessments)
 
-    if not mine:
+    def show(items, limit):
+        for (subject, obj), a in sorted(items.items(), key=lambda kv: kv[1].log_odds,
+                                        reverse=True)[:limit]:
+            print(f"  {_mask(subject, show_person)}  ->  {_mask(obj, show_person)}")
+            note = ""
+            if _seed_groups_are_self_published(seed, a):
+                note = ("  [self-published: only the site's own pages link it "
+                        "here; the other groups corroborate the entity, not the "
+                        "relationship]")
+            print(f"      {a.band.value}  ({a.estimative}) — "
+                  f"{a.independent_groups} independent evidence group(s){note}")
+            for line in list(a.top_evidence)[:3]:
+                print(f"        - {line}")
+
+    if not direct:
         print(f"  nothing resolved about {seed or 'the seed'} above threshold.")
-    for (subject, obj), a in sorted(mine.items(), key=lambda kv: kv[1].log_odds,
-                                    reverse=True)[:6]:
-        print(f"  {_mask(subject, show_person)}  ->  {_mask(obj, show_person)}")
-        note = ""
-        if _seed_groups_are_self_published(seed, a):
-            note = ("  [self-published: only the site's own pages link it here; "
-                    "the other groups corroborate the entity, not the relationship]")
-        print(f"      {a.band.value}  ({a.estimative}) — "
-              f"{a.independent_groups} independent evidence group(s){note}")
-        for line in list(a.top_evidence)[:3]:
-            print(f"        - {line}")
-
+    show(direct, 6)
+    if onward:
+        print("\n  WHO THOSE ACCOUNTS BELONG TO")
+        show(onward, 6)
+    other = rest
     if other:
         print(f"\n  {len(other)} further link(s) between third parties, not about "
               f"{seed or 'the seed'} — see attribution_report.md")
@@ -190,6 +208,45 @@ def _print_findings(res, show_person: bool = False) -> None:
           "conclusion\n  about a person is a lead until a statutory register "
           "confirms it.")
 
+
+
+def _payee(res, seed: str, show_person: bool) -> None:
+    """Name the payee the way an analyst does it by hand.
+
+    An ads.txt may list dozens of DIRECT accounts, most of them networks and
+    resellers whose sellers.json entry covers thousands of sites. The one that
+    identifies the operator is the entry whose DECLARED DOMAIN is this site:
+    the ad system is stating who it pays for this inventory.
+    """
+    graph = getattr(getattr(res, "resolution", None), "graph", None)
+    claims = list(getattr(graph, "claims", ()) or ())
+    if not claims or not seed:
+        return
+
+    hits = []
+    for c in claims:
+        raw = getattr(c, "raw", None) or {}
+        declared = str(raw.get("declared_domain") or "").lower().removeprefix("www.")
+        if declared and declared == seed.lower().removeprefix("www."):
+            hits.append((c, raw))
+    if not hits:
+        return
+
+    print("\nPAYEE — the ad system says it pays this party for this site")
+    for c, raw in hits[:5]:
+        name = _mask(str(getattr(c.object, "value", c.object)),
+                     show_person) if hasattr(c, "object") else "?"
+        kind = raw.get("name_kind", "")
+        print(f"  {getattr(c.subject, 'value', c.subject)}")
+        print(f"      declares domain  {raw.get('declared_domain')}  (matches the seed)")
+        print(f"      name             {name}")
+        print(f"      seller_type      {raw.get('seller_type')}   name kind: {kind}")
+        if kind == "natural_person":
+            print("      a natural person — a LEAD, not a finding, until a "
+                  "statutory register confirms it")
+    print("  Accounts whose declared domain is not this site are the ad "
+          "system's other\n  customers; they identify a network, not this "
+          "operator.")
 
 
 def _run(a: argparse.Namespace) -> int:
@@ -254,6 +311,7 @@ def _run(a: argparse.Namespace) -> int:
 
     print(banner())
     print(res.summary())
+    _payee(res, _seed_of(res), a.show_person)
     _print_findings(res, a.show_person)
     print()
     for p in res.outputs:

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-09-23
+
+- New `PAYEE` section names the operator directly. An ads.txt lists dozens of
+  DIRECT accounts, most of them networks whose sellers.json entry covers
+  thousands of sites; the one that identifies the operator is the entry whose
+  DECLARED DOMAIN is this site. That account, its seller_type and the name are
+  shown first, with natural-person names masked and marked as leads.
+
+## [2.0.6] - 2026-09-23
+
+- Findings are ordered by distance from the seed, not by score. Ranking both
+  hops together let seller-to-seller pairs outrank the site's own ads.txt
+  declarations, so the seed's own findings vanished from the list.
+- The second hop is shown only when it reaches a named party, under
+  `WHO THOSE ACCOUNTS BELONG TO`. Two sellers sharing an ad system are peers,
+  not a step toward whoever is paid.
+
 ## [2.0.5] - 2026-09-23
 
 - Findings follow the chain two hops, so the payee name appears. The answer is

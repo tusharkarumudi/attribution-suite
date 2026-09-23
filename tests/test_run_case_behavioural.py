@@ -454,3 +454,72 @@ def test_a_genuinely_corroborated_link_is_not_labelled(capsys):
                          ("wayback_ads|x.example|202501", 8.0)]),
     }))
     assert "self-published" not in capsys.readouterr().out
+
+
+def test_the_seed_s_own_links_are_never_outranked(capsys):
+    """Ranking both hops together by score put seller-to-seller pairs (8.0)
+    above the site's own ads.txt declarations (5.4), so widening the search
+    pushed the seed's own findings off the list entirely."""
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("insmask.com", {
+        ("domain:insmask.com", "seller_id:google.com/pub-160"):
+            _assessment(5.4, "UNSUPPORTED", 1, [("ads_txt|insmask.com", 5.4)]),
+        ("seller_id:appnexus.com/3626", "seller_id:google.com/pub-160"):
+            _assessment(8, "WEAK", 1, [("sellers_json|appnexus.com|3626", 8.0)]),
+    }))
+    out = capsys.readouterr().out
+    assert "domain:insmask.com  ->  seller_id:google.com/pub-160" in out
+    assert "seller_id:appnexus.com/3626  ->  seller_id:google.com" not in out, \
+        "peers sharing an ad system are not a step toward whoever is paid"
+
+
+def test_the_second_hop_reaches_a_named_party(capsys):
+    from attribution_suite.cli import _print_findings
+
+    _print_findings(_result("insmask.com", {
+        ("domain:insmask.com", "seller_id:google.com/pub-160"):
+            _assessment(5.4, "UNSUPPORTED", 1, [("ads_txt|insmask.com", 5.4)]),
+        ("seller_id:google.com/pub-160", "org_name:Insmask Media Ltd"):
+            _assessment(8, "STRONG_EVIDENCE", 1,
+                        [("sellers_json|google.com|pub-160", 8.0)]),
+    }))
+    out = capsys.readouterr().out
+    assert "WHO THOSE ACCOUNTS BELONG TO" in out
+    assert "org_name:Insmask Media Ltd" in out
+
+
+def test_the_payee_is_the_seller_that_declares_this_site(capsys):
+    """An ads.txt lists dozens of DIRECT accounts; most are networks whose
+    sellers.json entry covers thousands of sites. The one identifying the
+    operator is the entry whose declared domain IS this site."""
+    from attribution_suite.cli import _payee
+
+    res = _NS(resolution=_NS(graph=_NS(claims=[
+        _NS(subject=_NS(value="seller_id:google.com/pub-2201"),
+            object=_NS(value="person_name:A Person"),
+            raw={"declared_domain": "storiesdwon.co", "seller_type": "PUBLISHER",
+                 "name_kind": "natural_person"}),
+        _NS(subject=_NS(value="seller_id:appnexus.com/1234"),
+            object=_NS(value="org_name:Big Network Inc"),
+            raw={"declared_domain": "bignetwork.example",
+                 "seller_type": "INTERMEDIARY", "name_kind": "organization"}),
+    ])))
+    _payee(res, "storiesdwon.co", False)
+    out = capsys.readouterr().out
+    assert "seller_id:google.com/pub-2201" in out
+    assert "Big Network Inc" not in out, "other customers of the ad system are not the payee"
+    assert "[withheld" in out, "a natural person is masked on screen"
+    assert "LEAD, not a finding" in out
+
+
+def test_a_www_prefixed_declaration_still_matches(capsys):
+    from attribution_suite.cli import _payee
+
+    res = _NS(resolution=_NS(graph=_NS(claims=[
+        _NS(subject=_NS(value="seller_id:x/1"), object=_NS(value="org_name:Real Ltd"),
+            raw={"declared_domain": "www.wow.co", "seller_type": "PUBLISHER",
+                 "name_kind": "organization"}),
+    ])))
+    _payee(res, "wow.co", True)
+    assert "Real Ltd" in capsys.readouterr().out
