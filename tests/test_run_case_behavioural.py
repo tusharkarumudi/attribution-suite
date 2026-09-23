@@ -523,3 +523,38 @@ def test_a_www_prefixed_declaration_still_matches(capsys):
     ])))
     _payee(res, "wow.co", True)
     assert "Real Ltd" in capsys.readouterr().out
+
+
+def test_payee_falls_back_to_the_account_the_site_declares(capsys):
+    """Many individual sellers publish no domain. Showing nothing because the
+    strongest signal is missing hid a name the run had already found."""
+    from attribution_suite.cli import _payee
+
+    res = _NS(resolution=_NS(graph=_NS(claims=[
+        _NS(subject=_NS(value="domain:sssthread.com"),
+            object=_NS(value="seller_id:google.com/pub-544"), raw={}),
+        _NS(subject=_NS(value="seller_id:google.com/pub-544"),
+            object=_NS(value="person_name:Some Person"),
+            raw={"seller_type": "PUBLISHER", "name_kind": "natural_person",
+                 "declared_domain": None}),
+    ])))
+    _payee(res, "sssthread.com", True)
+    out = capsys.readouterr().out
+    assert "seller_id:google.com/pub-544" in out
+    assert "Some Person" in out
+    assert "none published" in out, "say why the strongest signal is absent"
+
+
+def test_blocked_urls_are_named_not_just_counted(monkeypatch, tmp_path):
+    """Counting blocks without naming them makes an absence undiagnosable: a
+    run that could not reach the file naming the payee looked identical to one
+    that skipped a stylesheet. Two runs of the same site differed and there was
+    no way to see why."""
+    from attribution_suite import runner
+
+    _real_world(monkeypatch)
+    res = runner.run_case(str(_case(tmp_path)), tmp_path / "out")
+    blocked = [w for w in res.stats.get("warnings", []) if "blocked:" in w]
+    if res.stats.get("collection_blocked"):
+        assert blocked, "a blocked retrieval must name its URL"
+        assert any("http" in w for w in blocked)

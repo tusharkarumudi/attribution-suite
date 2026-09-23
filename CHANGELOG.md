@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [2.0.9] - 2026-09-23
+
+- Blocked retrievals now name the URL, not just the count. Two runs of the same
+  site minutes apart gave different answers — one reached the file naming the
+  payee, the other was blocked before fetching it — and nothing in the output
+  said which URL was missing.
+
+## [2.0.8] - 2026-09-23
+
+- `PAYEE` falls back to the account the site declares in its own ads.txt when
+  the ad system publishes no domain for that seller — common for individual
+  sellers. Requiring the strongest signal hid a name the run had found.
+
 ## [2.0.7] - 2026-09-23
 
 - New `PAYEE` section names the operator directly. An ads.txt lists dozens of

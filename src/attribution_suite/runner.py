@@ -126,6 +126,14 @@ def run_case(
             f"{len(fetcher.blocked)} retrieval(s) were blocked and produced no "
             f"evidence: " + ", ".join(f"{k} ({n})" for k, n in
                                       sorted(reasons.items(), key=lambda kv: -kv[1])))
+        # WHICH url was blocked, not just how many. Without this an absence is
+        # undiagnosable: a run that could not reach the file naming the payee
+        # looks identical to one where a stylesheet was skipped.
+        for url, why in fetcher.blocked[:8]:
+            warnings.append(f"    blocked: {url} — {why}")
+        if len(fetcher.blocked) > 8:
+            warnings.append(f"    ... and {len(fetcher.blocked) - 8} more "
+                            "(full list in verification_trail.json)")
         if fetcher.count == 0:
             warnings.append(
                 "NO retrieval succeeded. Any absence in this report means the "

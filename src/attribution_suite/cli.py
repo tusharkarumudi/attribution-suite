@@ -223,30 +223,55 @@ def _payee(res, seed: str, show_person: bool) -> None:
     if not claims or not seed:
         return
 
-    hits = []
-    for c in claims:
+    want = seed.lower().removeprefix("www.")
+
+    def named(c):
         raw = getattr(c, "raw", None) or {}
-        declared = str(raw.get("declared_domain") or "").lower().removeprefix("www.")
-        if declared and declared == seed.lower().removeprefix("www."):
-            hits.append((c, raw))
+        return "name_kind" in raw
+
+    # Strongest: the ad system declares THIS site as the seller's domain.
+    hits = [(c, c.raw) for c in claims if named(c)
+            and str(c.raw.get("declared_domain") or "").lower()
+            .removeprefix("www.") == want]
+    note = ""
+    if not hits:
+        # Many individual sellers publish no domain at all. The account this
+        # site declares in its own ads.txt still names the payee -- showing
+        # nothing here just because the strongest signal is missing hid the
+        # answer the run had already found.
+        declared_here = {str(getattr(c.object, "value", c.object))
+                         for c in claims
+                         if str(getattr(c.subject, "value", c.subject)).lower()
+                         == f"domain:{want}"
+                         and str(getattr(c.object, "value", c.object))
+                         .startswith("seller_id:")}
+        hits = [(c, c.raw) for c in claims if named(c)
+                and str(getattr(c.subject, "value", c.subject)) in declared_here]
+        note = ("  (this ad system publishes no domain for the account; the "
+                "site's own\n   ads.txt is what ties it here)")
     if not hits:
         return
 
     print("\nPAYEE — the ad system says it pays this party for this site")
+    if note:
+        print(note)
     for c, raw in hits[:5]:
         name = _mask(str(getattr(c.object, "value", c.object)),
                      show_person) if hasattr(c, "object") else "?"
         kind = raw.get("name_kind", "")
         print(f"  {getattr(c.subject, 'value', c.subject)}")
-        print(f"      declares domain  {raw.get('declared_domain')}  (matches the seed)")
+        declared = raw.get("declared_domain")
+        print(f"      declares domain  {declared}  (matches the seed)" if declared
+              else "      declares domain  (none published by the ad system)")
         print(f"      name             {name}")
         print(f"      seller_type      {raw.get('seller_type')}   name kind: {kind}")
         if kind == "natural_person":
             print("      a natural person — a LEAD, not a finding, until a "
                   "statutory register confirms it")
-    print("  Accounts whose declared domain is not this site are the ad "
-          "system's other\n  customers; they identify a network, not this "
-          "operator.")
+    if not note:
+        print("  Accounts whose declared domain is not this site are the ad "
+              "system's other\n  customers; they identify a network, not this "
+              "operator.")
 
 
 def _run(a: argparse.Namespace) -> int:
