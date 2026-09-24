@@ -689,3 +689,38 @@ def test_payee_puts_the_direct_line_first_and_labels_resellers(capsys):
     assert out.index("Kredi Uzman") < out.index("Relabe LLC"), "DIRECT comes first"
     assert "RESELLER — this ad system RESELLS" in out
     assert "it is not the party being paid" in out
+
+
+def test_the_analysts_own_report_is_readable_by_default(tmp_path):
+    """Minimisation replaced every identifier with a hash, so the report the
+    analyst reads was `min:a5979016…` throughout — every name, domain and
+    account. Right for a report you hand to someone else; useless for your own."""
+    import yaml
+
+    from attribution_suite.cli import _synth_case
+
+    assert yaml.safe_load(_synth_case("x.example", None, tmp_path).read_text())[
+        "minimize"] is False
+    assert yaml.safe_load(_synth_case("x.example", None, tmp_path,
+                                      minimise=True).read_text())["minimize"] is True
+
+
+def test_incomplete_says_where_the_blocks_fell():
+    """Every blocked retrieval raised the same INCOMPLETE banner, so 226 robots
+    refusals on probe paths and 72 dead third-party hosts read exactly like a
+    run that could not reach the file naming the payee."""
+    from attribution_suite.cli import _incomplete_reason
+
+    reason = _incomplete_reason(
+        {"collection_blocked": 344, "blocked_on_subject": 12,
+         "blocked_elsewhere": 332}, _Scope())
+    assert "12 on the subject itself" in reason
+    assert "332 on third-party hosts" in reason
+
+
+def test_incomplete_still_reads_without_the_split():
+    """Older results carry no split; the message must not break."""
+    from attribution_suite.cli import _incomplete_reason
+
+    reason = _incomplete_reason({"collection_blocked": 5}, _Scope())
+    assert "blocked" in reason and "on the subject itself" not in reason

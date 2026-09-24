@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [2.0.16] - 2026-09-24
+
+- INCOMPLETE now says WHERE the blocks fell: how many were on the subject
+  itself and how many on third-party hosts. Every blocked retrieval raised the
+  same banner, so 226 robots refusals on probe paths and 72 dead hosts listed in
+  someone else's ads.txt read exactly like a run that could not reach the file
+  naming the payee.
+
+## [2.0.15] - 2026-09-24
+
+- `--domain` no longer minimises by default: the analyst's own report was
+  `min:a5979016...` throughout — every name, domain and account replaced by a
+  hash, and unreadable. Use `--minimise` for a report you hand to someone
+  else.
+
 ## [2.0.14] - 2026-09-24
 
 - `PAYEE` ranks the DIRECT line first and labels RESELLER lines. A RESELLER

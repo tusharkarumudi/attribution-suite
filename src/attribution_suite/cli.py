@@ -29,7 +29,7 @@ UNATTESTED = "unattested: --domain convenience invocation, no authority asserted
 
 
 def _synth_case(domain: str, authorization: str | None, outdir: Path,
-                max_requests: int = 800) -> Path:
+                max_requests: int = 800, minimise: bool = False) -> Path:
     """Write the case file a `--domain` run implies.
 
     Defaults are deliberately modest: one pivot hop and a bounded request
@@ -51,6 +51,11 @@ def _synth_case(domain: str, authorization: str | None, outdir: Path,
         "seeds": [f"domain:{domain}"],
         "entity_types_allowed": ["Company"],
         "audit_path": str(outdir / "audit.jsonl"),
+        # The analyst's own report must be READABLE. Minimisation replaces every
+        # identifier with a hash, which is right for a report you hand to someone
+        # else and useless for one you are reading yourself: every name, domain
+        # and account becomes `min:a5979016…`. Opt in with --minimise.
+        "minimize": minimise,
         "robots_policy": "respect",
         # Two hops, not one. The answer is seed -> seller_id -> the seller's
         # OWN site, whose about/imprint page names the people. Radius 1 stops
@@ -92,8 +97,15 @@ def _incomplete_reason(stats: dict, scope) -> str:
     why = []
     blocked = stats.get("collection_blocked")
     if blocked:
+        on_subject = stats.get("blocked_on_subject")
+        elsewhere = stats.get("blocked_elsewhere")
+        where = ""
+        if on_subject is not None:
+            where = (f" — {on_subject} on the subject itself, {elsewhere} on "
+                     "third-party hosts")
         why.append(f"{blocked} retrieval(s) were blocked by fetch policy or "
-                   "URL safety (robots.txt, a size cap, or a refused host)")
+                   f"URL safety (robots.txt, a size cap, or a refused host)"
+                   f"{where}")
     if stats.get("budget_exhausted"):
         why.append(f"the request budget ({scope.max_requests}) was reached")
     if stats.get("runtime_exhausted"):
@@ -367,7 +379,8 @@ def _run(a: argparse.Namespace) -> int:
             print("use --case or --domain, not both", file=sys.stderr)
             return 2
         case_path = _synth_case(a.domain, a.authorization, Path(a.out),
-                                max_requests=a.max_requests)
+                                max_requests=a.max_requests,
+                                minimise=a.minimise)
         print(f"case file written: {case_path}")
         if not a.authorization:
             print("authorization: none asserted — recorded as unattested in the "
@@ -515,6 +528,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--authorization", help="the authority under which you are investigating")
     r.add_argument("--max-requests", type=int, default=800,
                    help="request budget for --domain (default 800)")
+    r.add_argument("--minimise", "--minimize", dest="minimise",
+                   action="store_true",
+                   help="replace identifiers with hashes in the report and "
+                        "exports (for sharing; the report becomes unreadable "
+                        "to you)")
     r.add_argument("--diagnostics", action="store_true",
                    help="list every blocked and checked URL")
     r.add_argument("--show-person", action="store_true",

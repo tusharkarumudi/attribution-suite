@@ -13,6 +13,7 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from attribution_graph import (
     AttributionGraph,
@@ -272,6 +273,22 @@ def run_case(
     blocked = list(getattr(fetcher, "blocked", []))
     if blocked:
         stats["collection_blocked"] = len(blocked)
+        # Where the blocks fell matters. A run whose every block is a robots
+        # refusal on a probe path, or a dead host listed in someone else's
+        # ads.txt, is not missing anything about the subject -- but it raised
+        # the same INCOMPLETE banner as a run that could not reach the file
+        # naming the payee.
+        seed_hosts = {str(sd).split(":", 1)[1].lower()
+                      for sd in (getattr(scope, "seeds", ()) or ())
+                      if str(sd).startswith("domain:")}
+
+        def _on_seed(url: str) -> bool:
+            host = urlparse(url).hostname or ""
+            host = host.lower().removeprefix("www.")
+            return any(host == h or host.endswith("." + h) for h in seed_hosts)
+
+        stats["blocked_on_subject"] = sum(1 for u, _ in blocked if _on_seed(u))
+        stats["blocked_elsewhere"] = len(blocked) - stats["blocked_on_subject"]
         stats["result_complete"] = False
         _report_blocked()
         warnings.append(
