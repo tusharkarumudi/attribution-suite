@@ -28,7 +28,8 @@ from .version import banner, versions
 UNATTESTED = "unattested: --domain convenience invocation, no authority asserted"
 
 
-def _synth_case(domain: str, authorization: str | None, outdir: Path) -> Path:
+def _synth_case(domain: str, authorization: str | None, outdir: Path,
+                max_requests: int = 800) -> Path:
     """Write the case file a `--domain` run implies.
 
     Defaults are deliberately modest: one pivot hop and a bounded request
@@ -55,7 +56,10 @@ def _synth_case(domain: str, authorization: str | None, outdir: Path) -> Path:
         # OWN site, whose about/imprint page names the people. Radius 1 stops
         # at the seller account and never reaches the site that identifies it.
         "pivot_radius": 2,
-        "max_requests": 300,
+        # Two hops across a few dozen declared accounts does not fit in 300:
+        # a real run exhausted the budget before reaching the seller's own site,
+        # which is where the people are named. Override with --max-requests.
+        "max_requests": max_requests,
     }, sort_keys=False))
     return case
 
@@ -236,12 +240,17 @@ def _payee(res, seed: str, show_person: bool) -> None:
     identifies the operator is the entry whose DECLARED DOMAIN is this site:
     the ad system is stating who it pays for this inventory.
     """
-    graph = getattr(getattr(res, "resolution", None), "graph", None)
+    # The graph lives on the result itself; reading it from `resolution`
+    # returned nothing, so this section never printed.
+    graph = (getattr(res, "graph", None)
+             or getattr(getattr(res, "resolution", None), "graph", None))
     claims = list(getattr(graph, "claims", ()) or ())
     if not claims or not seed:
         return
 
     want = seed.lower().removeprefix("www.")
+    #: seller_id -> DIRECT / RESELLER, as the site's own ads.txt declares it.
+    declared_here: dict[str, str] = {}
 
     def named(c):
         raw = getattr(c, "raw", None) or {}
@@ -257,16 +266,27 @@ def _payee(res, seed: str, show_person: bool) -> None:
         # site declares in its own ads.txt still names the payee -- showing
         # nothing here just because the strongest signal is missing hid the
         # answer the run had already found.
-        declared_here = {str(getattr(c.object, "value", c.object))
-                         for c in claims
-                         if str(getattr(c.subject, "value", c.subject)).lower()
-                         == f"domain:{want}"
-                         and str(getattr(c.object, "value", c.object))
-                         .startswith("seller_id:")}
+        # Either direction: a claim may be written domain -> seller_id or
+        # seller_id -> domain, and assuming one of them found nothing.
+        # DIRECT vs RESELLER matters more than anything else here. A RESELLER
+        # line means that ad system resells inventory sold by someone else -- it
+        # is NOT the party being paid. Following a reseller names the reseller;
+        # the DIRECT line names the seller.
+        for c in claims:
+            a = str(getattr(c.subject, "value", c.subject))
+            b = str(getattr(c.object, "value", c.object))
+            rel = str((getattr(c, "raw", None) or {}).get("relationship") or "")
+            for one, other in ((a, b), (b, a)):
+                if one.lower() == f"domain:{want}" and other.startswith("seller_id:"):
+                    declared_here[other] = rel.upper() or declared_here.get(other, "")
         hits = [(c, c.raw) for c in claims if named(c)
                 and str(getattr(c.subject, "value", c.subject)) in declared_here]
-        note = ("  (this ad system publishes no domain for the account; the "
-                "site's own\n   ads.txt is what ties it here)")
+        # DIRECT first: the reseller lines are the ad system's own resale of
+        # someone else's inventory.
+        hits.sort(key=lambda h: declared_here.get(
+            str(getattr(h[0].subject, "value", h[0].subject)), "") != "DIRECT")
+        note = ("  (no account names this site as its own domain; these are the\n"
+                "   accounts the site's ads.txt declares)")
     if not hits:
         return
 
@@ -278,10 +298,27 @@ def _payee(res, seed: str, show_person: bool) -> None:
                      show_person) if hasattr(c, "object") else "?"
         kind = raw.get("name_kind", "")
         print(f"  {getattr(c.subject, 'value', c.subject)}")
-        declared = raw.get("declared_domain")
-        print(f"      declares domain  {declared}  (matches the seed)" if declared
-              else "      declares domain  (none published by the ad system)")
+        declared = str(raw.get("declared_domain") or "")
+        bare = declared.lower().removeprefix("www.")
+        if not declared:
+            print("      declares domain  (none published by the ad system)")
+        elif bare == want:
+            print(f"      declares domain  {declared}  (this site)")
+        else:
+            # The strongest lead in the whole chain: one payout account serving
+            # this site AND another. That other site is where an about or
+            # imprint page names people.
+            print(f"      declares domain  {declared}  — a DIFFERENT site")
+            print(f"      the same account is paid for {declared}; its about or "
+                  "imprint page is the next step")
         print(f"      name             {name}")
+        rel = declared_here.get(str(getattr(c.subject, "value", c.subject)), "")
+        if rel == "RESELLER":
+            print("      ads.txt says     RESELLER — this ad system RESELLS the "
+                  "inventory;\n                       it is not the party being "
+                  "paid. The DIRECT line is.")
+        elif rel:
+            print(f"      ads.txt says     {rel}")
         print(f"      seller_type      {raw.get('seller_type')}   name kind: {kind}")
         if kind == "natural_person":
             print("      a natural person — a LEAD, not a finding, until a "
@@ -329,8 +366,8 @@ def _run(a: argparse.Namespace) -> int:
         if a.case:
             print("use --case or --domain, not both", file=sys.stderr)
             return 2
-        case_path = _synth_case(a.domain, a.authorization,
-                                Path(a.out))
+        case_path = _synth_case(a.domain, a.authorization, Path(a.out),
+                                max_requests=a.max_requests)
         print(f"case file written: {case_path}")
         if not a.authorization:
             print("authorization: none asserted — recorded as unattested in the "
@@ -476,6 +513,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--case")
     r.add_argument("--domain", help="investigate one domain; writes the case file for you")
     r.add_argument("--authorization", help="the authority under which you are investigating")
+    r.add_argument("--max-requests", type=int, default=800,
+                   help="request budget for --domain (default 800)")
     r.add_argument("--diagnostics", action="store_true",
                    help="list every blocked and checked URL")
     r.add_argument("--show-person", action="store_true",

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [2.0.14] - 2026-09-24
+
+- `PAYEE` ranks the DIRECT line first and labels RESELLER lines. A RESELLER
+  entry means that ad system resells inventory sold by someone else and is
+  NOT the party being paid; following it named the reseller instead of the
+  seller — the wrong answer, stated confidently.
+
+## [2.0.13] - 2026-09-24
+
+- `PAYEE` prints. It read the graph from `resolution`, which returned nothing,
+  so the section never appeared even when the payee had been resolved. It also
+  now accepts a declaration written in either direction.
+- A declared domain that is NOT the seed is reported as such — one payout
+  account serving this site and another is the strongest lead in the chain, and
+  it was being labelled "matches the seed".
+- `--domain` allows 800 requests (was 300) and takes `--max-requests`. Two hops
+  across a few dozen declared accounts exhausted 300 before reaching the
+  seller's own site, which is where people are named.
+
 ## [2.0.12] - 2026-09-24
 
 - Default output is readable: per-URL blocked and checked lines are hidden

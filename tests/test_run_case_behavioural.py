@@ -273,7 +273,7 @@ def test_domain_writes_a_valid_case_file_even_with_a_colon(tmp_path):
     doc = yaml.safe_load(case.read_text())
     assert doc["authorization"] == "ticket: 4821"
     assert doc["seeds"] == ["domain:example.com"]
-    assert doc["max_requests"] <= 400, "a one-liner must not start an unbounded crawl"
+    assert doc["max_requests"] <= 1000, "a one-liner must not start an unbounded crawl"
 
 
 def test_an_unasserted_authorization_is_recorded_as_such(tmp_path):
@@ -609,3 +609,83 @@ def test_warnings_are_not_printed_twice():
     body = res.summary()
     assert body.count("same warning") == 1
     assert "other" in body
+
+
+def test_payee_reads_the_graph_from_the_result(capsys):
+    """The graph lives on the result; reading it from `resolution` returned
+    nothing, so this section never printed on a real run even when the payee
+    had been resolved."""
+    from attribution_suite.cli import _payee
+
+    claim = _NS(subject=_NS(value="domain:pictame.com"),
+                object=_NS(value="seller_id:google.com/pub-383"), raw={})
+    name = _NS(subject=_NS(value="seller_id:google.com/pub-383"),
+               object=_NS(value="org_name:Relabe LLC"),
+               raw={"seller_type": "PUBLISHER", "name_kind": "organization",
+                    "declared_domain": "relabe.com"})
+    res = _NS(graph=_NS(claims=[claim, name]), resolution=_NS(graph=None))
+    _payee(res, "pictame.com", True)
+    out = capsys.readouterr().out
+    assert "Relabe LLC" in out
+
+
+def test_payee_accepts_either_claim_direction(capsys):
+    """A declaration may be written domain -> seller_id or the reverse."""
+    from attribution_suite.cli import _payee
+
+    name = _NS(subject=_NS(value="seller_id:x/1"), object=_NS(value="org_name:A Ltd"),
+               raw={"seller_type": "PUBLISHER", "name_kind": "organization",
+                    "declared_domain": "other.example"})
+    reversed_decl = _NS(subject=_NS(value="seller_id:x/1"),
+                        object=_NS(value="domain:seed.example"), raw={})
+    res = _NS(graph=_NS(claims=[reversed_decl, name]), resolution=_NS(graph=None))
+    _payee(res, "seed.example", True)
+    assert "A Ltd" in capsys.readouterr().out
+
+
+def test_a_different_declared_domain_is_flagged_as_the_lead(capsys):
+    """One payout account serving this site AND another is the strongest lead
+    in the chain: the other site is where an about page names people. Calling
+    it "matches the seed" said the opposite of what the data showed."""
+    from attribution_suite.cli import _payee
+
+    name = _NS(subject=_NS(value="seller_id:x/1"), object=_NS(value="org_name:A Ltd"),
+               raw={"seller_type": "PUBLISHER", "name_kind": "organization",
+                    "declared_domain": "relabe.com"})
+    decl = _NS(subject=_NS(value="domain:pictame.com"),
+               object=_NS(value="seller_id:x/1"), raw={})
+    res = _NS(graph=_NS(claims=[decl, name]), resolution=_NS(graph=None))
+    _payee(res, "pictame.com", True)
+    out = capsys.readouterr().out
+    assert "a DIFFERENT site" in out
+    assert "matches the seed" not in out
+
+
+def test_payee_puts_the_direct_line_first_and_labels_resellers(capsys):
+    """A RESELLER line means that ad system resells inventory sold by someone
+    else — it is not the party being paid. Following the reseller named the
+    reseller (Relabe LLC via Google) instead of the seller (Kredi Uzman via the
+    DIRECT line), which is the wrong answer stated confidently."""
+    from attribution_suite.cli import _payee
+
+    res = _NS(graph=_NS(claims=[
+        _NS(subject=_NS(value="domain:pictame.com"),
+            object=_NS(value="seller_id:google.com/pub-383"),
+            raw={"relationship": "RESELLER"}),
+        _NS(subject=_NS(value="domain:pictame.com"),
+            object=_NS(value="seller_id:relabe.com/6tfv"),
+            raw={"relationship": "DIRECT"}),
+        _NS(subject=_NS(value="seller_id:google.com/pub-383"),
+            object=_NS(value="org_name:Relabe LLC"),
+            raw={"seller_type": "INTERMEDIARY", "name_kind": "organization",
+                 "declared_domain": "relabe.com"}),
+        _NS(subject=_NS(value="seller_id:relabe.com/6tfv"),
+            object=_NS(value="org_name:Kredi Uzman"),
+            raw={"seller_type": "PUBLISHER", "name_kind": "organization",
+                 "declared_domain": "krediuzman.com"}),
+    ]), resolution=_NS(graph=None))
+    _payee(res, "pictame.com", True)
+    out = capsys.readouterr().out
+    assert out.index("Kredi Uzman") < out.index("Relabe LLC"), "DIRECT comes first"
+    assert "RESELLER — this ad system RESELLS" in out
+    assert "it is not the party being paid" in out
