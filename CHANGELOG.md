@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [2.0.12] - 2026-09-24
+
+- Default output is readable: per-URL blocked and checked lines are hidden
+  behind `--diagnostics` (counts and caveats still shown, full list in
+  verification_trail.json).
+- Warnings are de-duplicated. The blocked report is appended more than once,
+  so the whole list printed twice — dozens of duplicated lines on a real run.
+
+## [2.0.11] - 2026-09-23
+
+- `--domain` now pivots two hops and allows 300 requests. The answer is
+  seed -> seller_id -> the seller's OWN site, whose about or imprint page
+  names the people; radius 1 stopped at the seller account and never fetched
+  the site that identifies it.
+- The seller's own site is shown under `WHO THOSE ACCOUNTS BELONG TO`.
+
 ## [2.0.10] - 2026-09-23
 
 - A finding supported by one evidence group now reads UNCORROBORATED rather

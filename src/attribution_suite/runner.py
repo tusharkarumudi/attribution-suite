@@ -56,8 +56,10 @@ class SuiteResult:
         for k, v in self.stats.items():
             L.append(f"  {k}: {v}")
         if self.warnings:
+            # De-duplicated, in order: the blocked report is appended more than
+            # once, which printed the whole list twice.
             L.append("  warnings:")
-            L += [f"    - {w}" for w in self.warnings]
+            L += [f"    - {w}" for w in dict.fromkeys(self.warnings)]
         return "\n".join(L)
 
 

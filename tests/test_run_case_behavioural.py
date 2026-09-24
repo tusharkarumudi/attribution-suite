@@ -273,7 +273,7 @@ def test_domain_writes_a_valid_case_file_even_with_a_colon(tmp_path):
     doc = yaml.safe_load(case.read_text())
     assert doc["authorization"] == "ticket: 4821"
     assert doc["seeds"] == ["domain:example.com"]
-    assert doc["max_requests"] <= 200, "a one-liner must not start an unbounded crawl"
+    assert doc["max_requests"] <= 400, "a one-liner must not start an unbounded crawl"
 
 
 def test_an_unasserted_authorization_is_recorded_as_such(tmp_path):
@@ -580,3 +580,32 @@ def test_zero_groups_is_still_unsupported():
     from attribution_suite.cli import _band_label
 
     assert _band_label(_assessment(0, "UNSUPPORTED", 0, [])).startswith("UNSUPPORTED")
+
+
+def test_domain_pivots_far_enough_to_reach_the_seller_s_own_site(tmp_path):
+    """The answer is seed -> seller_id -> the seller's OWN site, whose about or
+    imprint page names the people. Radius 1 stopped at the seller account, so
+    the site that identifies it was never fetched."""
+    import yaml
+
+    from attribution_suite.cli import _synth_case
+
+    doc = yaml.safe_load(_synth_case("example.com", None, tmp_path).read_text())
+    assert doc["pivot_radius"] >= 2
+
+
+def test_warnings_are_not_printed_twice():
+    """The blocked report is appended more than once, so the whole list
+    printed twice — on a real run that was dozens of duplicated lines."""
+    from attribution_suite.runner import SuiteResult
+
+    res = SuiteResult.__new__(SuiteResult)
+    res.stats = {"requests": 1}
+    res.warnings = ["same warning", "same warning", "other"]
+    res.scope = _NS(case_ref="T", max_requests=10)
+    res.outputs = []
+    res.resolution = _NS(assessments={})
+    res.graph = _NS(identifiers=[], claims=[], entities=[])
+    body = res.summary()
+    assert body.count("same warning") == 1
+    assert "other" in body

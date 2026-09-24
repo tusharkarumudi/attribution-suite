@@ -51,8 +51,11 @@ def _synth_case(domain: str, authorization: str | None, outdir: Path) -> Path:
         "entity_types_allowed": ["Company"],
         "audit_path": str(outdir / "audit.jsonl"),
         "robots_policy": "respect",
-        "pivot_radius": 1,
-        "max_requests": 200,
+        # Two hops, not one. The answer is seed -> seller_id -> the seller's
+        # OWN site, whose about/imprint page names the people. Radius 1 stops
+        # at the seller account and never reaches the site that identifies it.
+        "pivot_radius": 2,
+        "max_requests": 300,
     }, sort_keys=False))
     return case
 
@@ -116,7 +119,9 @@ def _seed_of(res) -> str:
 #: it reaches one of these -- seller-to-seller pairs are peers sharing an ad
 #: system, not a step toward whoever is paid.
 _ENTITY_KINDS = ("org_name:", "company_number:", "cik:", "lei:", "person_name:",
-                 "email:", "address:")
+                 "email:", "address:",
+                 # the seller's own site: its about page is what names people
+                 "domain:")
 
 
 def _tiers(seed: str, assessments):
@@ -348,7 +353,23 @@ def _run(a: argparse.Namespace) -> int:
         return 2
 
     print(banner())
-    print(res.summary())
+    # Per-URL detail is for debugging, not for a screen someone is reading.
+    # Default output states the counts; --diagnostics lists every URL.
+    lines = res.summary().split("\n")
+    if not a.diagnostics:
+        import re as _re
+
+        def _detail(line: str) -> bool:
+            # lines arrive bulleted: "    -     blocked: https://..."
+            return _re.sub(r"^[-\s]+", "", line).startswith(
+                ("blocked:", "checked:", "... and "))
+
+        hidden = sum(1 for ln in lines if _detail(ln))
+        lines = [ln for ln in lines if not _detail(ln)]
+        if hidden:
+            lines.append(f"    ({hidden} per-URL detail line(s) hidden — "
+                         "--diagnostics, or verification_trail.json)")
+    print("\n".join(lines))
     _payee(res, _seed_of(res), a.show_person)
     _print_findings(res, a.show_person)
     print()
@@ -455,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--case")
     r.add_argument("--domain", help="investigate one domain; writes the case file for you")
     r.add_argument("--authorization", help="the authority under which you are investigating")
+    r.add_argument("--diagnostics", action="store_true",
+                   help="list every blocked and checked URL")
     r.add_argument("--show-person", action="store_true",
                    help="show personal identifiers in the on-screen summary")
     r.add_argument("--out", default="./out")
