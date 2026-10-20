@@ -341,6 +341,186 @@ def _payee(res, seed: str, show_person: bool) -> None:
               "operator.")
 
 
+def _doctor(a: argparse.Namespace) -> int:
+    """Answer "is this set up correctly?" before a user blames the tool.
+
+    A missing API key, a broken install and a blocked network all present the
+    same way -- an empty result -- and a new user cannot tell them apart.
+    """
+    import shutil
+
+    ok = True
+    print("VERSIONS")
+    from .version import aligned, versions
+    for name, ver in versions().items():
+        print(f"  {name:22} {ver}")
+    if not aligned():
+        ok = False
+        print("  x packages are not on one MAJOR.MINOR line — "
+              "pip install -U --upgrade-strategy eager attribution-suite")
+
+    print("\nCOMMANDS")
+    for cmd in ("attribution", "attribution-suite", "paytrace",
+                "paytrace-index", "handlecorr"):
+        where = shutil.which(cmd)
+        print(f"  {'ok' if where else 'x '} {cmd:20} {where or 'NOT ON PATH'}")
+        ok = ok and bool(where)
+
+    print("\nLLM PLANNING")
+    key_set = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    try:
+        import anthropic  # noqa: F401
+        sdk = True
+    except ImportError:
+        sdk = False
+    from .investigator import DEFAULT_MODEL
+    print(f"  {'set  ' if key_set else 'unset'}  ANTHROPIC_API_KEY")
+    print(f"  {'ok   ' if sdk else 'x    '}  anthropic SDK"
+          + ("" if sdk else '   pip install "attribution-suite[llm]"'))
+    print(f"  model  {DEFAULT_MODEL}   (override with ANTHROPIC_MODEL)")
+    if key_set and not sdk:
+        ok = False
+        print("  x a key is set but the SDK is missing: `ask` will plan with "
+              "fixed rules,\n    which is NOT what setting the key implies.")
+    elif not key_set:
+        print("  `ask` plans with fixed rules. That is a supported mode, not a "
+              "failure.")
+
+    print("\nOPTIONAL KEYS (absent means that source is skipped, not broken)")
+    for env, what in (("CH_API_KEY", "UK Companies House officers and PSC"),
+                      ("OPENCORPORATES_TOKEN", "OpenCorporates registry search")):
+        print(f"  {'set  ' if os.environ.get(env) else 'unset'}  {env:22} {what}")
+
+    print("\nCACHE")
+    from paytrace.sellersjson import SELLERS_CACHE_DIR
+    files = list(SELLERS_CACHE_DIR.glob("*.json")) if SELLERS_CACHE_DIR.exists() else []
+    size = sum(f.stat().st_size for f in files) / 1024 / 1024
+    print(f"  {SELLERS_CACHE_DIR}")
+    print(f"  {len(files)} cached sellers.json, {size:.1f} MB"
+          + ("  (first run downloads Google's 104 MB file)" if not files else ""))
+
+    print("\nNETWORK")
+    try:
+        import asyncio
+
+        from paytrace import Fetcher
+
+        async def probe():
+            f = Fetcher(user_agent="attribution-suite doctor")
+            try:
+                return await f.get("https://pypi.org/robots.txt")
+            finally:
+                await f.aclose()
+
+        r = asyncio.run(probe())
+        print("  ok outbound HTTPS works" if r and r.status == 200
+              else f"  x probe returned {getattr(r, 'status', 'nothing')}")
+        ok = ok and bool(r and r.status == 200)
+    except Exception as e:
+        ok = False
+        print(f"  x outbound request failed: {type(e).__name__}: {e}")
+
+    print("\n" + ("Ready. Try:  attribution-suite --domain example.com"
+                  if ok else "Something above needs attention."))
+    return 0 if ok else 1
+
+
+#: How to invoke Robin. Override with ROBIN_CMD (e.g. a docker wrapper).
+ROBIN_CMD = os.environ.get("ROBIN_CMD", "robin")
+
+
+def _run_robin(query: str, out_dir: Path) -> Path | None:
+    """Run Robin for a dark web query and return its JSON.
+
+    Robin is a SEPARATE tool (apurvsinghgautam/robin) that needs Tor and its
+    own model credentials. Until now this suite could only IMPORT a file you
+    had produced by hand, which is why no dark web search ever happened in
+    practice: nothing invoked it.
+
+    Failure here is reported, never silent -- a dark web search that quietly
+    did not run is the worst possible outcome for an investigation.
+    """
+    import shutil
+    import subprocess
+
+    exe = shutil.which(ROBIN_CMD.split()[0])
+    if not exe:
+        print(f"robin not found on PATH as {ROBIN_CMD!r}. Install it "
+              "(https://github.com/apurvsinghgautam/robin), or set ROBIN_CMD, "
+              "or pass --robin FILE with output you already have.",
+              file=sys.stderr)
+        return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / "robin.json"
+    cmd = [*ROBIN_CMD.split(), "cli", "--query", query, "--output", str(target)]
+    if os.environ.get("ROBIN_MODEL"):
+        cmd += ["--model", os.environ["ROBIN_MODEL"]]
+    print(f"robin: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        print("robin: timed out after 30 minutes", file=sys.stderr)
+        return None
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+        print(f"robin: exited {proc.returncode}: " + " / ".join(tail),
+              file=sys.stderr)
+        return None
+    if not target.exists():
+        print(f"robin: reported success but wrote no {target}", file=sys.stderr)
+        return None
+    return target
+
+
+def _run_batch(a: argparse.Namespace) -> int:
+    """`--domains FILE`: one investigation per domain, one report each.
+
+    Reports go to <out>/<domain>/ so nothing is overwritten. One domain failing
+    does not stop the rest: a batch that aborts halfway is worse than one that
+    tells you which entries failed.
+    """
+    listing = Path(a.domains)
+    if not listing.exists():
+        print(f"no such file: {listing}", file=sys.stderr)
+        return 2
+    domains, seen = [], set()
+    for raw in listing.read_text().splitlines():
+        name = raw.split("#", 1)[0].strip().strip(",").lower()
+        name = name.removeprefix("http://").removeprefix("https://").split("/")[0]
+        if name and name not in seen:
+            seen.add(name)
+            domains.append(name)
+    if not domains:
+        print(f"{listing} contains no domains", file=sys.stderr)
+        return 2
+
+    root = Path(a.out)
+    print(f"{len(domains)} domain(s) from {listing}\n")
+    results: list[tuple[str, int]] = []
+    for n, domain in enumerate(domains, 1):
+        print(f"[{n}/{len(domains)}] {domain}")
+        one = argparse.Namespace(**vars(a))
+        one.domains, one.domain, one.out = None, domain, str(root / domain)
+        try:
+            rc = _run(one)
+        except KeyboardInterrupt:
+            print("\ninterrupted", file=sys.stderr)
+            return 130
+        except Exception as e:                      # one bad domain, not the batch
+            print(f"  {domain}: {type(e).__name__}: {e}", file=sys.stderr)
+            rc = 1
+        results.append((domain, rc))
+        print()
+
+    print("BATCH SUMMARY")
+    for domain, rc in results:
+        verdict = {0: "complete", 3: "incomplete"}.get(rc, f"failed (exit {rc})")
+        print(f"  {domain:40} {verdict}   {root / domain}")
+    worst = max((rc for _d, rc in results), default=0)
+    return 0 if worst == 0 else (3 if worst == 3 else 1)
+
+
 def _run(a: argparse.Namespace) -> int:
     from .version import aligned, versions
 
@@ -373,6 +553,16 @@ def _run(a: argparse.Namespace) -> int:
             file=sys.stderr)
         return 2
 
+    if getattr(a, "domains", None):
+        return _run_batch(a)
+
+    if getattr(a, "robin_query", None) and not a.robin:
+        produced = _run_robin(a.robin_query, Path(a.out))
+        if produced is None:
+            print("continuing without dark web results", file=sys.stderr)
+        else:
+            a.robin = str(produced)
+
     case_path = a.case
     if a.domain:
         if a.case:
@@ -386,7 +576,7 @@ def _run(a: argparse.Namespace) -> int:
             print("authorization: none asserted — recorded as unattested in the "
                   "audit trail")
     elif not a.case:
-        print("give --case FILE or --domain DOMAIN", file=sys.stderr)
+        print("give --case FILE, --domain DOMAIN or --domains FILE", file=sys.stderr)
         return 2
 
     from attribution_graph import PolicyError
@@ -523,27 +713,37 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="full chain from one case file")
-    r.add_argument("--case")
-    r.add_argument("--domain", help="investigate one domain; writes the case file for you")
-    r.add_argument("--authorization", help="the authority under which you are investigating")
-    r.add_argument("--max-requests", type=int, default=800,
+    g_what = r.add_argument_group("what to investigate")
+    g_scope = r.add_argument_group("how far to go")
+    g_out = r.add_argument_group("output")
+    g_import = r.add_argument_group("import from other tools")
+    g_what.add_argument("--case")
+    g_what.add_argument("--domain", help="investigate one domain; writes the case file for you")
+    g_what.add_argument("--domains", metavar="FILE",
+                   help="a file of domains, one per line; runs each and writes "
+                        "a separate report under <out>/<domain>/")
+    g_what.add_argument("--authorization", help="the authority under which you are investigating")
+    g_scope.add_argument("--max-requests", type=int, default=800,
                    help="request budget for --domain (default 800)")
-    r.add_argument("--minimise", "--minimize", dest="minimise",
+    g_out.add_argument("--minimise", "--minimize", dest="minimise",
                    action="store_true",
                    help="replace identifiers with hashes in the report and "
                         "exports (for sharing; the report becomes unreadable "
                         "to you)")
-    r.add_argument("--diagnostics", action="store_true",
+    g_out.add_argument("--diagnostics", action="store_true",
                    help="list every blocked and checked URL")
-    r.add_argument("--show-person", action="store_true",
+    g_out.add_argument("--show-person", action="store_true",
                    help="show personal identifiers in the on-screen summary")
-    r.add_argument("--out", default="./out")
-    r.add_argument("--index", default="", help="ads.txt corpus sqlite")
-    r.add_argument("--blacklist", default="")
-    r.add_argument("--handles", default="", help="observed-handle CSV/JSON")
-    r.add_argument("--spiderfoot", default="", help="SpiderFoot .csv or .db")
-    r.add_argument("--opencti", default="", help="STIX 2.1 bundle")
-    r.add_argument("--robin", default="", help="Robin dark web investigation JSON")
+    g_out.add_argument("--out", default="./out")
+    g_scope.add_argument("--index", default="", help="ads.txt corpus sqlite")
+    g_import.add_argument("--blacklist", default="")
+    g_import.add_argument("--handles", default="", help="observed-handle CSV/JSON")
+    g_import.add_argument("--spiderfoot", default="", help="SpiderFoot .csv or .db")
+    g_import.add_argument("--opencti", default="", help="STIX 2.1 bundle")
+    g_import.add_argument("--robin-query", metavar="QUERY",
+                          help="run Robin for this dark web query and import "
+                               "the result (needs robin on PATH and Tor)")
+    g_import.add_argument("--robin", default="", help="Robin dark web investigation JSON")
     # Withdrawn for this release. The flags were accepted and did nothing:
     # run_case() had no screenshot path. Worse, the capture module lives inside
     # attribution-graph and navigates URLs with a browser, which breaks the
@@ -558,10 +758,10 @@ def main(argv: list[str] | None = None) -> int:
     # nothing is a flag that lies.
     r.add_argument("--screenshots", action="store_true",
                    help=argparse.SUPPRESS)
-    r.add_argument("--no-scores", action="store_true",
+    g_out.add_argument("--no-scores", action="store_true",
                    help="omit confidence figures from the report")
-    r.add_argument("--no-evidence", action="store_true")
-    r.add_argument("--concurrency", type=int, default=6,
+    g_out.add_argument("--no-evidence", action="store_true")
+    g_scope.add_argument("--concurrency", type=int, default=6,
                    help="parallel collectors; must be >= 1")
     r.set_defaults(func=_run)
 
@@ -580,6 +780,9 @@ def main(argv: list[str] | None = None) -> int:
     v.set_defaults(func=_verify)
 
     sub.add_parser("version").set_defaults(func=_version)
+    sub.add_parser("doctor",
+                   help="check this machine is set up correctly"
+                   ).set_defaults(func=_doctor)
 
     known = {"run", "ask", "verify", "version"}
     argv = list(sys.argv[1:] if argv is None else argv)

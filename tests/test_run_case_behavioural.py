@@ -724,3 +724,148 @@ def test_incomplete_still_reads_without_the_split():
 
     reason = _incomplete_reason({"collection_blocked": 5}, _Scope())
     assert "blocked" in reason and "on the subject itself" not in reason
+
+
+# ---- batch mode ------------------------------------------------------------ #
+
+def test_a_domain_list_is_parsed_forgivingly(tmp_path, monkeypatch, capsys):
+    """People paste URLs, duplicates, blank lines and comments into a list.
+    Rejecting or double-running those is a worse answer than reading them."""
+    import argparse
+
+    from attribution_suite import cli
+
+    listing = tmp_path / "domains.txt"
+    listing.write_text("# header\nhttps://pypi.org/x/y\npypi.org\n\n"
+                       "EXAMPLE.invalid\nexample.invalid\n")
+    seen = []
+    monkeypatch.setattr(cli, "_run", lambda ns: seen.append(ns.domain) or 0)
+    rc = cli._run_batch(argparse.Namespace(domains=str(listing),
+                                           out=str(tmp_path / "out"), domain=None))
+    assert seen == ["pypi.org", "example.invalid"], seen
+    assert rc == 0
+
+
+def test_each_domain_gets_its_own_report_directory(tmp_path, monkeypatch):
+    """One shared --out would have each run overwrite the last."""
+    import argparse
+
+    from attribution_suite import cli
+
+    listing = tmp_path / "d.txt"
+    listing.write_text("a.example\nb.example\n")
+    outs = []
+    monkeypatch.setattr(cli, "_run", lambda ns: outs.append(ns.out) or 0)
+    cli._run_batch(argparse.Namespace(domains=str(listing),
+                                      out=str(tmp_path / "out"), domain=None))
+    assert len(set(outs)) == 2
+    assert all(o.endswith(("a.example", "b.example")) for o in outs)
+
+
+def test_one_failing_domain_does_not_abort_the_batch(tmp_path, monkeypatch, capsys):
+    """A batch that dies halfway is worse than one that says which entries
+    failed and carries on."""
+    import argparse
+
+    from attribution_suite import cli
+
+    listing = tmp_path / "d.txt"
+    listing.write_text("bad.example\ngood.example\n")
+
+    def fake(ns):
+        if ns.domain == "bad.example":
+            raise RuntimeError("boom")
+        return 0
+
+    monkeypatch.setattr(cli, "_run", fake)
+    rc = cli._run_batch(argparse.Namespace(domains=str(listing),
+                                           out=str(tmp_path / "out"), domain=None))
+    out = capsys.readouterr()
+    assert "good.example" in out.out
+    assert rc == 1, "the batch reports failure without hiding the successes"
+
+
+def test_a_missing_or_empty_list_is_reported(tmp_path, capsys):
+    import argparse
+
+    from attribution_suite import cli
+
+    assert cli._run_batch(argparse.Namespace(
+        domains=str(tmp_path / "nope.txt"), out=str(tmp_path), domain=None)) == 2
+    empty = tmp_path / "e.txt"
+    empty.write_text("# only a comment\n")
+    assert cli._run_batch(argparse.Namespace(
+        domains=str(empty), out=str(tmp_path), domain=None)) == 2
+
+
+# ---- Robin: invoked, not merely importable --------------------------------- #
+
+def test_robin_is_invoked_and_its_output_imported(tmp_path, monkeypatch):
+    """Robin could only be IMPORTED from a file you produced by hand, so no
+    dark web search ever happened: nothing invoked it."""
+    import json
+    import os
+    import stat
+
+    from attribution_suite import cli
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "robin"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'while [ $# -gt 0 ]; do case "$1" in --output) out="$2"; shift;; esac; shift; done\n'
+        'printf \'{"query":"x","results":[]}\' > "$out"\n')
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    produced = cli._run_robin("ransomware payments", tmp_path / "out")
+    assert produced is not None and produced.exists()
+    assert json.loads(produced.read_text())["query"] == "x"
+
+
+def test_a_missing_robin_is_reported_not_silent(tmp_path, monkeypatch, capsys):
+    """A dark web search that quietly did not run is the worst outcome."""
+    from attribution_suite import cli
+
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(cli, "ROBIN_CMD", "robin-not-installed")
+    assert cli._run_robin("q", tmp_path / "out") is None
+    assert "not found on PATH" in capsys.readouterr().err
+
+
+def test_a_failing_robin_is_reported(tmp_path, monkeypatch, capsys):
+    import os
+    import stat
+
+    from attribution_suite import cli
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "robin"
+    stub.write_text("#!/bin/sh\necho 'tor unreachable' >&2\nexit 3\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(cli, "ROBIN_CMD", "robin")
+
+    assert cli._run_robin("q", tmp_path / "out") is None
+    err = capsys.readouterr().err
+    assert "exited 3" in err and "tor unreachable" in err
+
+
+def test_robin_reporting_success_without_output_is_caught(tmp_path, monkeypatch, capsys):
+    import os
+    import stat
+
+    from attribution_suite import cli
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "robin"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(cli, "ROBIN_CMD", "robin")
+
+    assert cli._run_robin("q", tmp_path / "out") is None
+    assert "wrote no" in capsys.readouterr().err

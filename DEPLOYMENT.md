@@ -27,12 +27,17 @@ For deployment planning, the two constraints that shape host design:
 ## 1. Install
 
 ```bash
-pip install attribution-graph paytrace handle-correlation attribution-suite
+# the only line most people need
+pip install attribution-suite            # pulls the other three
+
+# then check the machine is set up
+attribution doctor
 ```
 
 Optional extras:
 
 ```bash
+pip install "attribution-suite[llm]"          # `ask` plans with Claude
 pip install "attribution-suite[mcp]"          # MCP server for agentic hosts
 pip install "attribution-graph[screenshots]"  # not wired into `attribution run`
 ```

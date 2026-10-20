@@ -4,12 +4,86 @@
 [![PyPI](https://img.shields.io/pypi/v/attribution-suite.svg)](https://pypi.org/project/attribution-suite/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-One install and one CLI over the attribution toolchain.
+One install and one command: who is paid for a website, and on what evidence.
 
 ```bash
 pip install attribution-suite
-attribution run --case case.yaml --index paytrace.sqlite --out ./out
+attribution-suite --domain example.com
 ```
+
+That writes the case file for you, follows `ads.txt` → `sellers.json` →
+registries, prints the answer, and leaves a report and an evidence package in
+`./out`. Nothing else to configure.
+
+The output opens with the answer:
+
+```
+PAYEE — the ad system says it pays this party for this site
+  relabe.com/6tFvXWWAp9RZaZhG3
+      declares domain  krediuzman.com  — a DIFFERENT site
+      name             Kredi Uzman
+      ads.txt says     DIRECT
+  google.com/pub-3831894559014614
+      name             Relabe LLC
+      ads.txt says     RESELLER — this ad system RESELLS the inventory;
+                       it is not the party being paid. The DIRECT line is.
+```
+
+**DIRECT names the seller; RESELLER names a reseller.** When a payout account
+declares a *different* site, one account serves both — the strongest lead there
+is, and that site's about page is the next step.
+
+### Check your setup first
+
+```bash
+attribution doctor
+```
+
+Versions, commands on PATH, optional API keys, cache state and one live request.
+A missing key, a broken install and a blocked network otherwise all look the
+same: an empty result.
+
+### The options you will actually want
+
+| | |
+|---|---|
+| `--domains FILE` | a list of domains; one report each under `<out>/<domain>/` |
+| `--show-person` | show a person's name (masked by default — it is a lead, not a finding) |
+| `--max-requests N` | request budget, default 800 |
+| `--diagnostics` | list every blocked and checked URL |
+| `--minimise` | hash identifiers, for a report you hand to someone else |
+| `--authorization "ticket: 123"` | recorded in the audit trail; without it the run records itself as unattested |
+
+`attribution-suite --help` groups the rest by purpose. Exit **3** means
+INCOMPLETE — a budget or a block stopped the search — and the message says
+which. It is not a failure.
+
+### Optional: Claude planning, and dark web search
+
+```bash
+pip install "attribution-suite[llm]"     # without this, `ask` uses fixed rules
+export ANTHROPIC_API_KEY=sk-ant-...      # model: ANTHROPIC_MODEL, default claude-sonnet-5
+```
+
+Setting the key without the extra installed gets you fixed rules — the tool now
+says so instead of falling back in silence. `attribution doctor` reports both.
+
+Dark web search runs [Robin](https://github.com/apurvsinghgautam/robin), a
+separate tool that needs Tor and its own credentials:
+
+```bash
+attribution-suite --domain example.com --robin-query "example brand"
+attribution run --case case.yaml --robin already-produced.json   # or import
+```
+
+If `robin` is not on PATH the run says so and continues without dark web
+results. A search that quietly did not happen is worse than one that failed
+out loud.
+
+### First run downloads Google's sellers.json
+
+104 MB, cached for a day and reused across every account. Do it before you need
+an answer in a hurry. Move the cache with `PAYTRACE_SELLERS_CACHE`.
 
 ---
 

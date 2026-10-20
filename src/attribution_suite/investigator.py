@@ -42,6 +42,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,7 +63,8 @@ from attribution_graph.evidence import secure_mkdir, secure_write
 # User-Agents reporting the old version.
 from ._version import __version__ as _VERSION  # noqa: E402
 
-DEFAULT_MODEL = "claude-sonnet-4-5"
+#: Overridable with ANTHROPIC_MODEL so a new model does not need a release.
+DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 HOME_PLACEHOLDER = "investigation://expansion"
 MAX_STEPS = 20
 
@@ -257,6 +259,11 @@ class LLMPlanner:
         self._client = anthropic.Anthropic(api_key=self.api_key)
 
     def decide(self, question: str, context: list[str], tools: list[str]) -> dict:
+        """Ask the model what to do next.
+
+        A transport or API error here used to abort the whole investigation
+        after collection had already happened. The caller falls back to rules.
+        """
         msg = self._client.messages.create(
             model=self.model, max_tokens=800, system=SYSTEM,
             messages=[{"role": "user", "content":
@@ -292,11 +299,21 @@ class Investigator:
         self.offline = offline
 
         key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        #: Why the LLM planner was not used, when a key was supplied. Falling
+        #: back in silence meant a user who set ANTHROPIC_API_KEY got fixed
+        #: rules and no explanation -- most often because the `anthropic` SDK
+        #: is an optional extra and was never installed.
+        self.planner_note = ""
         if key:
             try:
                 self.planner: Any = LLMPlanner(key, model)
-            except RuntimeError:
+            except RuntimeError as e:
                 self.planner = RulePlanner()
+                self.planner_note = (
+                    f"ANTHROPIC_API_KEY is set but the LLM planner is "
+                    f"unavailable ({e}); planning with fixed rules instead. "
+                    'Install the extra:  pip install "attribution-suite[llm]"')
+                print(self.planner_note, file=sys.stderr)
         else:
             self.planner = RulePlanner()
 

@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [2.0.19] - 2026-09-27
+
+- `--robin-query` runs Robin and imports the result. Robin could previously
+  only be IMPORTED from a file produced by hand, so no dark web search ever
+  happened: nothing invoked it. A missing, failing or empty-handed Robin is
+  reported and the run continues without dark web results.
+- A key set without the `llm` extra no longer falls back to fixed rules in
+  silence — the commonest reason `ask` ignored ANTHROPIC_API_KEY.
+- Default model is `claude-sonnet-5`, overridable with ANTHROPIC_MODEL, so a
+  new model does not need a release.
+- `doctor` reports the SDK and model, not just whether a key is set.
+
+## [2.0.18] - 2026-09-25
+
+- New `attribution doctor`: versions, commands on PATH, optional keys, cache
+  state and one live request. A missing key, a broken install and a blocked
+  network all presented identically — as an empty result.
+- `--help` groups options by purpose instead of listing seventeen flat.
+- Live end-to-end tests (`pytest -m network`) and a scheduled CI job. The run
+  test fails on the event-loop bug that produced no report at all.
+- README quickstart rewritten around `attribution-suite --domain`, which it
+  did not previously mention.
+
+## [2.0.17] - 2026-09-25
+
+- New `--domains FILE`: one investigation per domain, each with its own
+  report under `<out>/<domain>/`. URLs, duplicates, blanks and comments in
+  the list are handled, and one failing domain does not abort the batch.
+- The run summary names collectors that produced nothing, so a dead
+  collector is visible instead of hidden inside a blocked total.
+
 ## [2.0.16] - 2026-09-24
 
 - INCOMPLETE now says WHERE the blocks fell: how many were on the subject

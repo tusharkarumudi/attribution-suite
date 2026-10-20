@@ -287,6 +287,20 @@ def run_case(
             host = host.lower().removeprefix("www.")
             return any(host == h or host.endswith("." + h) for h in seed_hosts)
 
+        # Per collector, so a dead one is visible. 36 collectors run; a total of
+        # "378 blocked" cannot say which produced nothing, every time.
+        lost = dict(getattr(fetcher, "blocked_by_collector", {}) or {})
+        produced: dict[str, int] = {}
+        for c in getattr(engine.graph, "claims", ()) or ():
+            name = str(getattr(c, "collector", "") or "")
+            if name:
+                produced[name] = produced.get(name, 0) + 1
+        dead = sorted(n for n, k in lost.items()
+                      if k and not produced.get(n)
+                      and n not in ("unknown", "fetch_policy"))
+        stats["collectors_with_claims"] = len(produced)
+        if dead:
+            stats["collectors_that_produced_nothing"] = ", ".join(dead)
         stats["blocked_on_subject"] = sum(1 for u, _ in blocked if _on_seed(u))
         stats["blocked_elsewhere"] = len(blocked) - stats["blocked_on_subject"]
         stats["result_complete"] = False
