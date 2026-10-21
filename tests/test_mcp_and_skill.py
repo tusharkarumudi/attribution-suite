@@ -14,7 +14,9 @@ import pytest
 
 SUITE = Path(__file__).resolve().parents[1]
 SERVER = SUITE / "src" / "attribution_suite" / "mcp_server.py"
-SKILL = SUITE / "skill" / "SKILL.md"
+# Inside the package: a skill that lives only in a git checkout reaches
+# nobody who installed the tool.
+SKILL = SUITE / "src" / "attribution_suite" / "skill" / "SKILL.md"
 
 
 def _tool_names() -> set[str]:
@@ -115,3 +117,70 @@ def test_skill_forbids_routing_around_the_person_refusal():
     text = SKILL.read_text()
     assert "route around" in text
     assert "assembled step by step is the same artifact" in text
+
+
+def test_the_skill_is_inside_the_installed_package():
+    """A skill in a top-level directory reaches only people with a git clone.
+
+    Everyone who installs from PyPI -- which is everyone the quickstart tells
+    to use pipx -- got a tool whose agent-facing half was missing, with nothing
+    saying so.
+    """
+    import attribution_suite
+
+    shipped = Path(attribution_suite.__file__).parent / "skill" / "SKILL.md"
+    assert shipped.exists(), f"the skill is not importable at {shipped}"
+    assert "entity-attribution" in shipped.read_text()
+
+
+def test_the_wheel_contains_the_skill():
+    """Built for real, because `force-include` is easy to get wrong silently."""
+    import glob
+    import subprocess
+    import sys
+    import tempfile
+    import zipfile
+
+    out = tempfile.mkdtemp()
+    build = subprocess.run([sys.executable, "-m", "build", "-w", "-o", out,
+                            str(SUITE)], capture_output=True, text=True)
+    if build.returncode != 0:
+        pytest.skip("build backend unavailable in this environment")
+    wheels = glob.glob(f"{out}/*.whl")
+    assert wheels, build.stdout + build.stderr
+    names = zipfile.ZipFile(wheels[0]).namelist()
+    assert "attribution_suite/skill/SKILL.md" in names, \
+        f"skill missing from the wheel; it has {len(names)} files"
+
+
+def test_the_skill_does_not_promise_calibration():
+    """The toolkit's central caveat is that the model is NOT calibrated.
+
+    An earlier copy of this skill advertised "calibrated confidence" in its
+    description -- the one line a host reads when deciding to use it.
+    """
+    text = SKILL.read_text()
+    front = text.split("---")[1].lower()
+    assert "calibrated probability" not in front.replace("not calibrated probability", "")
+    assert "not calibrated" in front or "not a calibrated" in front, \
+        "the description must say the bands are not calibrated"
+
+
+def test_the_skill_says_how_to_run_the_tool():
+    """Interpretation rules without an invocation leave a model able to
+    describe a result it has no way to produce."""
+    text = SKILL.read_text()
+    assert "attribution-suite --domain" in text
+    assert "--authorization" in text
+    assert "attribution doctor" in text
+    assert "Exit codes" in text or "exit codes" in text
+
+
+def test_the_skill_readme_points_at_something_that_exists():
+    """It used to point at `../mcp/`, a directory removed two releases
+    earlier because it shadowed the real `mcp` package."""
+    readme = SKILL.parent / "README.md"
+    text = readme.read_text()
+    assert "../mcp/" not in text, "dangling path in install instructions"
+    for claim in ("attribution skill --install", "attribution-mcp"):
+        assert claim in text, f"{claim} is the actual route and is not mentioned"

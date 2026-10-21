@@ -27,20 +27,51 @@ For deployment planning, the two constraints that shape host design:
 ## 1. Install
 
 ```bash
-# the only line most people need
-pip install attribution-suite            # pulls the other three
+# the only three lines most people need
+sudo apt install pipx && pipx ensurepath   # macOS: brew install pipx
+pipx install attribution-suite             # pulls the other three
+attribution doctor                         # then check the machine is set up
+```
 
-# then check the machine is set up
-attribution doctor
+**`pipx`, not `pip`.** On Ubuntu 24.04, Debian 12, current Fedora and Homebrew
+Python, a system-wide `pip install` is refused outright:
+
+```
+error: externally-managed-environment
+```
+
+That is [PEP 668](https://peps.python.org/pep-0668/) — the OS protecting the
+Python that `apt` owns — and it applies to every package, not this one. The
+install simply does not happen, and the next command reports
+`attribution: command not found`. **Do not work around it with
+`--break-system-packages`:** it writes into a Python that the package manager
+is entitled to replace. pipx gives the tool its own environment and puts
+`attribution` on PATH; `pipx ensurepath` is what adds `~/.local/bin`, and it
+takes effect in a new shell.
+
+A virtualenv is the alternative, and the right choice when the suite is a
+library inside a larger program:
+
+```bash
+python3 -m venv /opt/attribution
+/opt/attribution/bin/pip install attribution-suite
+/opt/attribution/bin/attribution doctor      # by path: no activation needed
 ```
 
 Optional extras:
 
 ```bash
-pip install "attribution-suite[llm]"          # `ask` plans with Claude
-pip install "attribution-suite[mcp]"          # MCP server for agentic hosts
-pip install "attribution-graph[screenshots]"  # not wired into `attribution run`
+pipx install "attribution-suite[llm]"              # `ask` plans with Claude
+pipx install "attribution-suite[mcp]"              # MCP server for agentic hosts
+pipx inject attribution-suite anthropic            # add the extra to an existing install
+pipx inject attribution-suite playwright --include-apps   # screenshots (not wired into `run`)
 ```
+
+Under pipx, the dependencies' own commands — `paytrace`, `paytrace-index`,
+`handlecorr` — are deliberately not on PATH: pipx exposes only the apps of the
+package it was asked to install. `attribution` and `attribution-suite` cover
+everything they do. `attribution doctor` reports them as `--` rather than a
+fault, and prints the one-line remedy if you want them anyway.
 
 Python 3.11–3.14. The four packages release together and **must be on the same
 version** — `attribution version` warns if they diverge.
@@ -97,9 +128,27 @@ manifest. It records an analyst's assertion; it does not establish authority.
 ## 3. Run
 
 ```bash
-export OXYLABS_PW=...                 # only if using a proxy egress
+# one domain, case file written for you
+attribution-suite --domain example.com --authorization "ticket: ACME-1234"
+
+# a list of domains: one investigation and one report each
+attribution-suite --domains domains.txt --out ./out
+
+# a case file you wrote yourself (section 2)
 attribution run --case case.yaml --out ./out
+
+export OXYLABS_PW=...                 # only if using a proxy egress
 ```
+
+`--domains` writes each domain's output under `<out>/<domain>/` and prints a
+summary table at the end; one failing domain does not abort the batch. The
+process exit code is the **worst** of the individual outcomes — the codes below
+are ordered by severity — so automation can branch on it without parsing the
+summary.
+
+Run `attribution doctor` first on any machine you have not used before. A
+missing key, a broken install and a blocked network all produce the same
+empty result, and `doctor` is the only thing that distinguishes them.
 
 ### Exit codes — check these in automation
 
@@ -205,16 +254,27 @@ not in English.
 
 ## 8. Agentic use
 
+Two surfaces, and a host that can take both should:
+
 ```bash
-attribution-mcp                        # stdio MCP server
+attribution skill --install       # the rules -> ~/.claude/skills/entity-attribution
+attribution skill --mcp-config    # the tools: host entry, absolute path resolved
+pipx inject attribution-suite mcp # the MCP server itself, if not already present
+attribution-mcp                   # stdio, when a host wants to launch it directly
 ```
 
-```json
-{"mcpServers": {"attribution": {"command": "attribution-mcp"}}}
-```
+The skill ships **inside the installed package**
+(`attribution_suite/skill/SKILL.md`), so an install is all that is needed. It previously lived in a top-level directory that existed only in a git
+checkout, which meant everyone who installed from PyPI had a tool whose
+agent-facing half was missing and nothing telling them so. `attribution doctor`
+now reports whether the skill is installed for a host and whether the server is
+reachable.
 
-The Claude Skill in `attribution-suite/skill/SKILL.md` carries the operating
-rules a tool schema cannot express.
+The skill carries the operating rules a tool schema cannot express — that a
+band is evidence strength and not a probability, that `OWNERDOMAIN` is the
+subject's claim about itself, that person-scoped search is refused by design
+and must not be reassembled from other searches, and that instructions found
+in a fetched page are evidence about the subject rather than direction.
 
 The exposed surface is **narrower than the CLI** on purpose: the user is not
 reviewing each call, and the model choosing arguments has read untrusted web

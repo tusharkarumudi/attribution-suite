@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "attribution-suite"
-version = "2.0.19"
+version = "2.0.20"
 description = "One install and one CLI over the attribution-graph toolchain"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,6 +40,12 @@ Homepage = "https://github.com/tusharkarumudi/attribution-suite"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/attribution_suite"]
+
+# The skill lives INSIDE the package (src/attribution_suite/skill/), so the
+# packages entry above already ships it -- no force-include, which duplicated
+# the path and made the wheel unbuildable. It used to sit in a top-level
+# skill/ directory, where it existed only in a git checkout: everyone who
+# installed from PyPI got a tool whose agent-facing half was missing.
 
 [tool.ruff]
 line-length = 100

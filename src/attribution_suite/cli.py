@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 
+from .install import extra_hint, install_mode
 from .investigator import Refused
 from .runner import run_case
 from .version import banner, versions
@@ -347,24 +348,62 @@ def _doctor(a: argparse.Namespace) -> int:
     A missing API key, a broken install and a blocked network all present the
     same way -- an empty result -- and a new user cannot tell them apart.
     """
+    import importlib.util
     import shutil
 
     ok = True
-    print("VERSIONS")
+    mode = install_mode()
+
+    print("INSTALL")
+    print(f"  {mode:8} {sys.prefix}")
+    if mode == "system":
+        print("  Debian, Ubuntu, Fedora and Homebrew refuse to install into a "
+              "system Python (PEP 668).\n"
+              "  If `pip install` failed with 'externally-managed-environment',"
+              " use pipx:\n"
+              "    sudo apt install pipx && pipx ensurepath\n"
+              '    pipx install "attribution-suite[llm]"')
+
+    print("\nVERSIONS")
     from .version import aligned, versions
     for name, ver in versions().items():
         print(f"  {name:22} {ver}")
     if not aligned():
         ok = False
         print("  x packages are not on one MAJOR.MINOR line — "
-              "pip install -U --upgrade-strategy eager attribution-suite")
+              + ("pipx install --force attribution-suite" if mode == "pipx"
+                 else "pip install -U --upgrade-strategy eager "
+                      "attribution-suite"))
 
     print("\nCOMMANDS")
-    for cmd in ("attribution", "attribution-suite", "paytrace",
-                "paytrace-index", "handlecorr"):
+    for cmd in ("attribution", "attribution-suite"):
         where = shutil.which(cmd)
         print(f"  {'ok' if where else 'x '} {cmd:20} {where or 'NOT ON PATH'}")
         ok = ok and bool(where)
+
+    # The three below belong to the dependencies. pipx exposes only the apps of
+    # the package it was asked to install, so their absence under pipx is how
+    # pipx works -- not a broken install, and not a reason to fail the check.
+    extra = [(cmd, shutil.which(cmd))
+             for cmd in ("paytrace", "paytrace-index", "handlecorr")]
+    for cmd, where in extra:
+        if where:
+            mark = "ok"
+        elif mode == "pipx":
+            mark = "--"
+        else:
+            mark = "x "
+        print(f"  {mark} {cmd:20} {where or 'NOT ON PATH'}")
+        if not where and mode != "pipx":
+            ok = False
+    if mode == "pipx" and any(w is None for _, w in extra):
+        print("  The three above come from the dependencies; pipx does not put "
+              "a dependency's\n"
+              "  commands on PATH. `attribution` and `attribution-suite` do "
+              "everything they do.\n"
+              "  To have them anyway:\n"
+              "    pipx inject attribution-suite paytrace handle-correlation "
+              "--include-apps")
 
     print("\nLLM PLANNING")
     key_set = bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -375,8 +414,9 @@ def _doctor(a: argparse.Namespace) -> int:
         sdk = False
     from .investigator import DEFAULT_MODEL
     print(f"  {'set  ' if key_set else 'unset'}  ANTHROPIC_API_KEY")
+    sdk_fix = extra_hint("llm", "anthropic")
     print(f"  {'ok   ' if sdk else 'x    '}  anthropic SDK"
-          + ("" if sdk else '   pip install "attribution-suite[llm]"'))
+          + ("" if sdk else f"   {sdk_fix}"))
     print(f"  model  {DEFAULT_MODEL}   (override with ANTHROPIC_MODEL)")
     if key_set and not sdk:
         ok = False
@@ -385,6 +425,31 @@ def _doctor(a: argparse.Namespace) -> int:
     elif not key_set:
         print("  `ask` plans with fixed rules. That is a supported mode, not a "
               "failure.")
+
+    # The agent-facing half is the easiest thing to have silently missing: a
+    # skill that was never installed and an MCP server whose extra was never
+    # added both present as "the agent just does not use the tool".
+    print("\nAGENT SURFACE")
+    shipped = SKILL_DIR / "SKILL.md"
+    print(f"  {'ok' if shipped.exists() else 'x '} skill in this install   "
+          f"{SKILL_DIR if shipped.exists() else 'MISSING'}")
+    installed = [d for d in (DEFAULT_SKILL_HOME,
+                             Path.cwd() / ".claude" / "skills"
+                             / "entity-attribution")
+                 if (d / "SKILL.md").exists()]
+    if installed:
+        for d in installed:
+            print(f"  ok installed for a host  {d}")
+    else:
+        print("  -- not installed for a host   attribution skill --install")
+    mcp_sdk = importlib.util.find_spec("mcp") is not None
+    mcp_bin = shutil.which("attribution-mcp")
+    print(f"  {'ok' if mcp_sdk else '--'} mcp SDK"
+          + ("" if mcp_sdk else f"                 {extra_hint('mcp', 'mcp')}"))
+    print(f"  {'ok' if mcp_bin else '--'} attribution-mcp         "
+          f"{mcp_bin or 'not on PATH'}")
+    if mcp_sdk and mcp_bin:
+        print("  attribution skill --mcp-config  prints the host entry")
 
     print("\nOPTIONAL KEYS (absent means that source is skipped, not broken)")
     for env, what in (("CH_API_KEY", "UK Companies House officers and PSC"),
@@ -423,6 +488,65 @@ def _doctor(a: argparse.Namespace) -> int:
     print("\n" + ("Ready. Try:  attribution-suite --domain example.com"
                   if ok else "Something above needs attention."))
     return 0 if ok else 1
+
+
+SKILL_DIR = Path(__file__).resolve().parent / "skill"
+
+#: Where Claude Code and the Claude desktop app look for skills.
+DEFAULT_SKILL_HOME = Path.home() / ".claude" / "skills" / "entity-attribution"
+
+
+def _skill(a: argparse.Namespace) -> int:
+    """Locate, install or configure the agent-facing surface.
+
+    The skill carries the rules a model cannot infer from a tool schema -- that
+    a band is evidence strength and not a probability, that OWNERDOMAIN is a
+    self-assertion, that instructions found in a fetched page are evidence
+    rather than direction. It used to live in a directory that only existed in
+    a git checkout, so the people most likely to need it -- anyone who had
+    simply installed the tool -- could not get at it.
+    """
+    import json
+    import shutil
+
+    if a.mcp_config:
+        exe = shutil.which("attribution-mcp") or "attribution-mcp"
+        print(json.dumps(
+            {"mcpServers": {"attribution": {"command": exe}}}, indent=2))
+        if not shutil.which("attribution-mcp"):
+            print("\n  attribution-mcp is not on PATH. Install the extra:\n"
+                  f"    {extra_hint('mcp', 'mcp')}", file=sys.stderr)
+            return 1
+        return 0
+
+    src = SKILL_DIR
+    if not (src / "SKILL.md").exists():
+        print(f"the skill is missing from this install: {src}", file=sys.stderr)
+        return 1
+
+    if not a.install:
+        print(f"skill:  {src}")
+        print(f"files:  {', '.join(sorted(f.name for f in src.iterdir()))}")
+        print("\ninstall it for an agentic host:")
+        print("  attribution skill --install"
+              f"            # -> {DEFAULT_SKILL_HOME}")
+        print("  attribution skill --install --to DIR")
+        print("  attribution skill --mcp-config"
+              "         # for a host that speaks MCP instead")
+        return 0
+
+    dest = Path(a.to).expanduser() if a.to else DEFAULT_SKILL_HOME
+    if dest.exists() and not a.force:
+        print(f"{dest} already exists; pass --force to overwrite",
+              file=sys.stderr)
+        return 1
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
+    print(f"installed: {dest}")
+    print("the host picks it up on its next start.")
+    return 0
 
 
 #: How to invoke Robin. Override with ROBIN_CMD (e.g. a docker wrapper).
@@ -517,8 +641,13 @@ def _run_batch(a: argparse.Namespace) -> int:
     for domain, rc in results:
         verdict = {0: "complete", 3: "incomplete"}.get(rc, f"failed (exit {rc})")
         print(f"  {domain:40} {verdict}   {root / domain}")
-    worst = max((rc for _d, rc in results), default=0)
-    return 0 if worst == 0 else (3 if worst == 3 else 1)
+    # The documented exit codes are ordered by severity (0 clean, 3 incomplete,
+    # 4 invalid), so the worst individual outcome is the batch's outcome. The
+    # previous version collapsed everything except 0 and 3 to 1 -- which the
+    # exit-code table defines as "evidence package failed verification", so a
+    # batch containing an INVALID result reported a verification failure that
+    # had not happened.
+    return max((rc for _d, rc in results), default=0)
 
 
 def _run(a: argparse.Namespace) -> int:
@@ -706,18 +835,31 @@ def _version(_: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser(prog: str = "attribution") -> argparse.ArgumentParser:
+    """Construct the CLI.
+
+    Separate from `main` so the option surface can be inspected -- by a test
+    that every flag carries help text, and by anything generating
+    documentation from the real parser rather than a copy of it that drifts.
+    """
     ap = argparse.ArgumentParser(
-        prog="attribution",
+        prog=prog,
         description="Unified entity attribution suite")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="full chain from one case file")
+    if prog == "attribution-suite":
+        # Invoked as the one-command entry point, there is no subcommand
+        # to mention: "usage: attribution-suite run" is a command the
+        # user never typed and cannot type.
+        r.prog = prog
     g_what = r.add_argument_group("what to investigate")
     g_scope = r.add_argument_group("how far to go")
     g_out = r.add_argument_group("output")
     g_import = r.add_argument_group("import from other tools")
-    g_what.add_argument("--case")
+    g_what.add_argument("--case", metavar="FILE",
+                   help="a case file you wrote yourself; everything the run "
+                        "does is declared in it (see case.example.yaml)")
     g_what.add_argument("--domain", help="investigate one domain; writes the case file for you")
     g_what.add_argument("--domains", metavar="FILE",
                    help="a file of domains, one per line; runs each and writes "
@@ -734,9 +876,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="list every blocked and checked URL")
     g_out.add_argument("--show-person", action="store_true",
                    help="show personal identifiers in the on-screen summary")
-    g_out.add_argument("--out", default="./out")
-    g_scope.add_argument("--index", default="", help="ads.txt corpus sqlite")
-    g_import.add_argument("--blacklist", default="")
+    g_out.add_argument("--out", default="./out", metavar="DIR",
+                   help="where the report, exports and evidence package go "
+                        "(default ./out)")
+    g_scope.add_argument("--index", metavar="DB", default="", help="ads.txt corpus sqlite")
+    g_import.add_argument("--blacklist", default="", metavar="FILE",
+                   help="your own list of shared-infrastructure domains, one "
+                        "per line; identifiers on them stop being treated as "
+                        "distinctive (none ships with the tool)")
     g_import.add_argument("--handles", default="", help="observed-handle CSV/JSON")
     g_import.add_argument("--spiderfoot", default="", help="SpiderFoot .csv or .db")
     g_import.add_argument("--opencti", default="", help="STIX 2.1 bundle")
@@ -760,7 +907,10 @@ def main(argv: list[str] | None = None) -> int:
                    help=argparse.SUPPRESS)
     g_out.add_argument("--no-scores", action="store_true",
                    help="omit confidence figures from the report")
-    g_out.add_argument("--no-evidence", action="store_true")
+    g_out.add_argument("--no-evidence", action="store_true",
+                   help="skip the evidence package: no captures, hashes or "
+                        "timestamps, so the result cannot be independently "
+                        "verified later")
     g_scope.add_argument("--concurrency", type=int, default=6,
                    help="parallel collectors; must be >= 1")
     r.set_defaults(func=_run)
@@ -784,7 +934,33 @@ def main(argv: list[str] | None = None) -> int:
                    help="check this machine is set up correctly"
                    ).set_defaults(func=_doctor)
 
-    known = {"run", "ask", "verify", "version"}
+    sk = sub.add_parser("skill",
+                        help="the agent skill: where it is, and install it")
+    sk.add_argument("--install", action="store_true",
+                    help="copy the skill into your skills directory")
+    sk.add_argument("--to", metavar="DIR", default="",
+                    help="install into DIR instead of ~/.claude/skills/"
+                         "entity-attribution")
+    sk.add_argument("--force", action="store_true",
+                    help="overwrite an existing installed copy")
+    sk.add_argument("--mcp-config", action="store_true",
+                    help="print the MCP server entry for an agentic host, "
+                         "with the absolute path resolved")
+    sk.set_defaults(func=_skill)
+
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    # The prog name is whatever the user typed: `attribution-suite --help`
+    # printing "usage: attribution run" sends them looking for a command they
+    # did not use and cannot type.
+    prog = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "attribution"
+    if prog not in ("attribution", "attribution-suite"):
+        prog = "attribution"
+    ap = build_parser(prog)
+
+    known = {"run", "ask", "verify", "version", "doctor"}
     argv = list(sys.argv[1:] if argv is None else argv)
 
     # Pass through to the component CLIs rather than duplicating their flags.

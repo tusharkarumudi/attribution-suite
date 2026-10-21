@@ -8,9 +8,12 @@ Implementation: `src/attribution_suite/mcp_server.py` (inside the package, so
 the console script resolves after a normal install).
 
 ```bash
-pip install "attribution-suite[mcp]"
-attribution-mcp                     # stdio
+pipx install "attribution-suite[mcp]"   # pipx, not pip: see DEPLOYMENT.md
+attribution-mcp                        # stdio
 ```
+
+The host must find `attribution-mcp` on PATH. `pipx ensurepath` arranges that;
+in a virtualenv, give the host the absolute path to the binary instead.
 
 `claude_desktop_config.json`:
 
@@ -23,9 +26,21 @@ attribution-mcp                     # stdio
 > Server` resolved to this project's own file and every import failed. It is
 > now only inside the package, where it cannot collide.
 
-## Claude Skill
+## The skill
 
-`../skill/SKILL.md`. Carries the operating rules a tool schema cannot express:
+```bash
+attribution skill                      # where it is, and what is in it
+attribution skill --install            # -> ~/.claude/skills/entity-attribution
+attribution skill --mcp-config         # the host entry for MCP, path resolved
+```
+
+It ships inside the package (`attribution_suite/skill/SKILL.md`). It used to
+live in a top-level `skill/` directory, which meant it existed only in a git
+checkout: every person who followed the quickstart and installed from PyPI got
+a tool whose agent-facing half was missing, with nothing saying so.
+`attribution doctor` now reports whether it is installed for a host.
+
+It carries the operating rules a tool schema cannot express:
 that bands are evidence strength rather than probability, that `OWNERDOMAIN` is
 a self-assertion, that person-scoped search is refused by design and must not be
 routed around, and that instructions found in retrieved content are evidence

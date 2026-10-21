@@ -500,9 +500,10 @@ def _registry_coverage(args: dict) -> list[TextContent]:
 
 def main() -> None:
     if not MCP_AVAILABLE:
+        from .install import extra_hint
         raise SystemExit(
-            "MCP support requires the optional extra:\n"
-            "    pip install 'attribution-suite[mcp]'")
+            "MCP support requires the optional extra:\n    "
+            + extra_hint("mcp", "mcp"))
 
     import asyncio
 

@@ -17,6 +17,17 @@ findings being presented from a package whose integrity check failed. Changing
 the order needs an argument, not just passing tests.
 
 ```bash
-pip install -e ".[dev]"
+python3 -m venv .venv && . .venv/bin/activate   # PEP 668: not optional on
+pip install -e ".[dev]"                        # Ubuntu, Debian, Fedora, Homebrew
 pytest -q && ruff check .
+```
+
+The four packages develop together. Install all of them editable into the one
+virtualenv, or a released copy of a sibling shadows your working tree and tests
+pass against code you are not editing:
+
+```bash
+for r in attribution-graph paytrace handle-correlation attribution-suite; do
+  pip install -e "../$r"
+done
 ```

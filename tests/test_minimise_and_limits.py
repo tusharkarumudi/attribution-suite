@@ -17,6 +17,24 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _survives(form: str, text: str) -> bool:
+    """Does `form` appear in `text` as its own token?
+
+    This is the contract minimisation actually implements: `minimise.scrub`
+    replaces values at token boundaries, using this same pattern. Checking for
+    a bare substring instead asserts something no hashing scheme can deliver.
+    `abc` is three hex characters, so a random 32-hex claim id contains it
+    0.78% of the time -- about one run in eleven across the dozen ids in these
+    artifacts -- and this test failed on a build whose minimisation was
+    perfectly correct, pointing at `e5020df` + `abc` + `32471cb30f6ef7c32b098a`.
+
+    Loosening an assertion is only safe with a control that proves it still
+    fires, which is `test_the_leak_check_still_catches_a_real_leak` below.
+    """
+    return re.search(rf"(?<![0-9A-Za-z]){re.escape(form)}(?![0-9A-Za-z])",
+                     text) is not None
+
+
 def _repo(pkg: str) -> Path:
     """Path to a sibling package, skipping the test when it is not present.
 
@@ -97,9 +115,85 @@ def test_derived_artifacts_contain_no_form_of_a_seed(tmp_path, kind, value):
     audit = (tmp_path / "a.jsonl").read_text()
     for form in canonical_forms(value):
         for artifact in out.iterdir():
-            assert form not in artifact.read_text(errors="ignore"), \
+            assert not _survives(form, artifact.read_text(errors="ignore")), \
                 f"{form!r} survives in {artifact.name}"
-        assert form not in audit, f"{form!r} survives in review log"
+        assert not _survives(form, audit), f"{form!r} survives in review log"
+
+
+@pytest.mark.parametrize("leak", [
+    '"subject": "handle:abc"',          # unhashed in a field
+    "https://x.example/?q=abc",         # unhashed in a URL
+    '"correlation_group": "analytics|abc"',
+    "candidate abc, seen twice",        # prose in the review log
+    '{"handle": "abc"}',
+])
+def test_the_leak_check_still_catches_a_real_leak(leak):
+    """The control for `_survives`.
+
+    A boundary-aware search is weaker than a substring search, so it has to be
+    shown to still fire on every shape a genuine leak takes. If this test ever
+    passes while reporting no leak, the check above has stopped checking.
+    """
+    assert _survives("abc", leak), f"a real leak went undetected in {leak!r}"
+
+
+def test_a_random_id_that_contains_the_seed_is_not_a_leak(tmp_path, monkeypatch):
+    """The regression for the flake itself, made deterministic.
+
+    Claim and entity ids are `uuid4().hex`. CI drew
+    `e5020dfabc32471cb30f6ef7c32b098a` for a case seeded with `abc` and failed
+    a correct build. Forcing that exact id proves the check tolerates it --
+    and a bare substring search, asserted here, does not.
+    """
+    import uuid
+
+    from attribution_graph import (
+        AttributionGraph,
+        CaseScope,
+        Claim,
+        EntityType,
+        Identifier,
+        IdKind,
+        Predicate,
+        Reliability,
+        resolve,
+    )
+    from attribution_graph.export import write_all
+    from attribution_graph.minimise import canonical_forms
+
+    colliding = "e5020dfabc32471cb30f6ef7c32b098a"
+    monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(hex=colliding))
+
+    (tmp_path / "c.yaml").write_text(
+        "case_ref: T\nauthorization: t\nseeds: [handle:abc]\n"
+        f"audit_path: {tmp_path / 'a.jsonl'}\nminimize: true\n"
+        "salt: 00112233445566778899aabbccddeeff\n")
+    scope = CaseScope.load(str(tmp_path / "c.yaml"))
+
+    g = AttributionGraph(case_ref="T")
+    for group in ("analytics", "ads_txt"):
+        for who, k in (("abc", IdKind.HANDLE),
+                       ("other-site.example", IdKind.DOMAIN)):
+            g.add_claim(Claim(
+                subject=Identifier(k, who),
+                predicate=Predicate.SHARES_ANALYTICS_ID,
+                object=Identifier(IdKind.ANALYTICS_ID, f"ga4:G-{group}"),
+                collector="c", source_url=f"https://x.example/?q={who}",
+                reliability=Reliability.AUTHORITATIVE,
+                correlation_group=f"{group}|{who}"))
+
+    out = tmp_path / "out"
+    write_all(g, resolve(g, {EntityType.PERSON, EntityType.PERSONA,
+                             EntityType.COMPANY}), scope, out)
+
+    graph_json = (out / "investigation_graph.json").read_text()
+    assert colliding in graph_json, "the colliding id was not used; test is void"
+    assert "abc" in graph_json, "no substring collision; test is void"
+
+    for form in canonical_forms("abc"):
+        for artifact in out.iterdir():
+            assert not _survives(form, artifact.read_text(errors="ignore")), \
+                f"{form!r} survives in {artifact.name}"
 
 
 def test_no_length_threshold_exempts_an_identifier():

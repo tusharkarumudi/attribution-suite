@@ -21,7 +21,7 @@ def test_routing(q, kind, subject):
 
 
 def test_lei_routes_to_company():
-    assert classify("look up 5493001KJTIIGC8Y1R12").kind == "company"
+    assert classify("look up EXAMPLELEI0000000001").kind == "company"
 
 
 # ---- refusals ------------------------------------------------------------- #
@@ -226,3 +226,59 @@ def test_live_investigation_does_not_crash_at_the_pivot(monkeypatch, tmp_path):
     inv = Investigator(offline=False).investigate(
         "who operates live-site.example?", out=str(tmp_path / "out"))
     assert inv.pivot is not None, "the pivot step must run to completion"
+
+
+# --------------------------------------------------------------------------- #
+# The planner's reply is untrusted input like any other
+# --------------------------------------------------------------------------- #
+
+class _Reply:
+    def __init__(self, text):
+        self.content = [type("B", (), {"type": "text", "text": text})()]
+
+
+def _planner_decision(monkeypatch, text, tools=("fetch_ads_txt",)):
+    import sys
+    import types
+
+    fake = types.ModuleType("anthropic")
+
+    class Client:
+        def __init__(self, *a, **k):
+            self.messages = types.SimpleNamespace(
+                create=lambda **kw: _Reply(text))
+
+    fake.Anthropic = Client
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    from attribution_suite.investigator import LLMPlanner
+
+    p = LLMPlanner(api_key="example-key")   # never sent: the client is a stub
+    return p.decide("who operates it", [], list(tools))
+
+
+def test_planner_malformed_json_does_not_raise(monkeypatch):
+    d = _planner_decision(monkeypatch, '{"action": "call_tool" oops}')
+    assert d["action"] == "finish"
+    assert "malformed JSON" in d["rationale"]
+
+
+def test_planner_reply_with_no_json_finishes(monkeypatch):
+    d = _planner_decision(monkeypatch, "I would start with the ads.txt file.")
+    assert d["action"] == "finish"
+
+
+def test_planner_cannot_name_a_tool_that_does_not_exist(monkeypatch):
+    d = _planner_decision(
+        monkeypatch, '{"action": "call_tool", "tool": "read_email", "args": {}}')
+    assert d["action"] == "finish"
+    assert "unavailable tool" in d["rationale"]
+
+
+def test_planner_valid_choice_is_returned_unchanged(monkeypatch):
+    d = _planner_decision(
+        monkeypatch,
+        '{"action": "call_tool", "tool": "fetch_ads_txt",'
+        ' "args": {"domain": "a.example"}, "rationale": "start at the source"}')
+    assert d["action"] == "call_tool"
+    assert d["tool"] == "fetch_ads_txt"

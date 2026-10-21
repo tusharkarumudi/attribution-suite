@@ -254,8 +254,10 @@ class LLMPlanner:
         try:
             import anthropic
         except ImportError:
+            from .install import extra_hint
             raise RuntimeError(
-                'pip install "attribution-suite[llm]"') from None
+                "the anthropic SDK is not installed:  "
+                + extra_hint("llm", "anthropic")) from None
         self._client = anthropic.Anthropic(api_key=self.api_key)
 
     def decide(self, question: str, context: list[str], tools: list[str]) -> dict:
@@ -273,7 +275,21 @@ class LLMPlanner:
                        "Next step as JSON:"}])
         text = "".join(b.text for b in msg.content if b.type == "text")
         m = re.search(r"\{.*\}", text, re.S)
-        return json.loads(m.group(0)) if m else {"action": "finish"}
+        if not m:
+            return {"action": "finish", "rationale": "no JSON in the reply"}
+        try:
+            decision = json.loads(m.group(0))
+        except json.JSONDecodeError as e:
+            return {"action": "finish",
+                    "rationale": f"malformed JSON from the model: {e}"}
+        if not isinstance(decision, dict):
+            return {"action": "finish", "rationale": "reply was not an object"}
+        if (decision.get("action") == "call_tool"
+                and decision.get("tool") not in tools):
+            return {"action": "finish",
+                    "rationale": f"model chose an unavailable tool: "
+                                 f"{decision.get('tool')!r}"}
+        return decision
 
 
 # --------------------------------------------------------------------------- #
@@ -308,11 +324,12 @@ class Investigator:
             try:
                 self.planner: Any = LLMPlanner(key, model)
             except RuntimeError as e:
+                from .install import extra_hint
                 self.planner = RulePlanner()
                 self.planner_note = (
                     f"ANTHROPIC_API_KEY is set but the LLM planner is "
                     f"unavailable ({e}); planning with fixed rules instead. "
-                    'Install the extra:  pip install "attribution-suite[llm]"')
+                    f"Install it:  {extra_hint('llm', 'anthropic')}")
                 print(self.planner_note, file=sys.stderr)
         else:
             self.planner = RulePlanner()

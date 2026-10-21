@@ -358,15 +358,15 @@ def test_findings_are_about_the_domain_that_was_asked(capsys):
     so GLEIF cross-references outranked the site's own payee."""
     from attribution_suite.cli import _print_findings
 
-    _print_findings(_result("pictame.com", {
-        ("domain:pictame.com", "seller_id:adnet.example/99"):
-            _assessment(5, "MODERATE_EVIDENCE", 2, [("ads_txt|pictame.com", 8.0)]),
-        ("company_number:IE/462932", "lei:635400IRYI5QC7GUYI75"):
+    _print_findings(_result("pic-viewer.example", {
+        ("domain:pic-viewer.example", "seller_id:adnet.example/99"):
+            _assessment(5, "MODERATE_EVIDENCE", 2, [("ads_txt|pic-viewer.example", 8.0)]),
+        ("company_number:IE/000462932", "lei:EXAMPLELEI0000000004"):
             _assessment(14, "MODERATE_EVIDENCE", 1, [("gleif|x", 14.0)]),
     }))
     out = capsys.readouterr().out
     assert "seller_id:adnet.example/99" in out, "the seed's own payee must appear"
-    assert "lei:635400IRYI5QC7GUYI75" not in out, "third-party links must not be paraded"
+    assert "lei:EXAMPLELEI0000000004" not in out, "third-party links must not be paraded"
     assert "1 further link(s)" in out, "but they must still be counted"
 
 
@@ -376,10 +376,10 @@ def test_a_self_published_claim_is_labelled(capsys):
     attribution of a real company."""
     from attribution_suite.cli import _print_findings
 
-    _print_findings(_result("pictame.com", {
-        ("cik:0001326801", "domain:pictame.com"):
+    _print_findings(_result("pic-viewer.example", {
+        ("cik:0001234567", "domain:pic-viewer.example"):
             _assessment(9, "STRONG_EVIDENCE", 2,
-                        [("imprint|pictame.com|/terms", 8.0)]),
+                        [("imprint|pic-viewer.example|/terms", 8.0)]),
     }))
     out = capsys.readouterr().out
     assert "self-published" in out
@@ -412,13 +412,13 @@ def test_the_payee_name_is_reachable_through_the_chain(capsys):
     name the seed filed the payee itself under "other links"."""
     from attribution_suite.cli import _print_findings
 
-    _print_findings(_result("pictame.com", {
-        ("domain:pictame.com", "seller_id:google.com/pub-383"):
-            _assessment(5, "MODERATE_EVIDENCE", 1, [("ads_txt|pictame.com", 5.4)]),
+    _print_findings(_result("pic-viewer.example", {
+        ("domain:pic-viewer.example", "seller_id:google.com/pub-383"):
+            _assessment(5, "MODERATE_EVIDENCE", 1, [("ads_txt|pic-viewer.example", 5.4)]),
         ("seller_id:google.com/pub-383", "org_name:Some Media Ltd"):
             _assessment(8, "STRONG_EVIDENCE", 1,
                         [("sellers_json|google.com|pub-383", 8.0)]),
-        ("company_number:IE/462932", "lei:635400IRY"):
+        ("company_number:IE/000462932", "lei:635400IRY"):
             _assessment(14, "MODERATE_EVIDENCE", 1, [("gleif|x", 14.0)]),
     }))
     out = capsys.readouterr().out
@@ -432,11 +432,11 @@ def test_a_registry_lookup_is_not_corroboration_of_the_relationship(capsys):
     Meta" into STRONG_EVIDENCE that Meta operates the site."""
     from attribution_suite.cli import _print_findings
 
-    _print_findings(_result("pictame.com", {
-        ("cik:0001326801", "domain:pictame.com"):
+    _print_findings(_result("pic-viewer.example", {
+        ("cik:0001234567", "domain:pic-viewer.example"):
             _assessment(9, "STRONG_EVIDENCE", 2,
-                        [("imprint|pictame.com|/terms", 8.0),
-                         ("edgar|0001326801", 8.0)]),
+                        [("imprint|pic-viewer.example|/terms", 8.0),
+                         ("edgar|0001234567", 8.0)]),
     }))
     out = capsys.readouterr().out
     assert "self-published" in out
@@ -462,14 +462,14 @@ def test_the_seed_s_own_links_are_never_outranked(capsys):
     pushed the seed's own findings off the list entirely."""
     from attribution_suite.cli import _print_findings
 
-    _print_findings(_result("insmask.com", {
-        ("domain:insmask.com", "seller_id:google.com/pub-160"):
-            _assessment(5.4, "UNSUPPORTED", 1, [("ads_txt|insmask.com", 5.4)]),
+    _print_findings(_result("mask-viewer.example", {
+        ("domain:mask-viewer.example", "seller_id:google.com/pub-160"):
+            _assessment(5.4, "UNSUPPORTED", 1, [("ads_txt|mask-viewer.example", 5.4)]),
         ("seller_id:appnexus.com/3626", "seller_id:google.com/pub-160"):
             _assessment(8, "WEAK", 1, [("sellers_json|appnexus.com|3626", 8.0)]),
     }))
     out = capsys.readouterr().out
-    assert "domain:insmask.com  ->  seller_id:google.com/pub-160" in out
+    assert "domain:mask-viewer.example  ->  seller_id:google.com/pub-160" in out
     assert "seller_id:appnexus.com/3626  ->  seller_id:google.com" not in out, \
         "peers sharing an ad system are not a step toward whoever is paid"
 
@@ -477,9 +477,9 @@ def test_the_seed_s_own_links_are_never_outranked(capsys):
 def test_the_second_hop_reaches_a_named_party(capsys):
     from attribution_suite.cli import _print_findings
 
-    _print_findings(_result("insmask.com", {
-        ("domain:insmask.com", "seller_id:google.com/pub-160"):
-            _assessment(5.4, "UNSUPPORTED", 1, [("ads_txt|insmask.com", 5.4)]),
+    _print_findings(_result("mask-viewer.example", {
+        ("domain:mask-viewer.example", "seller_id:google.com/pub-160"):
+            _assessment(5.4, "UNSUPPORTED", 1, [("ads_txt|mask-viewer.example", 5.4)]),
         ("seller_id:google.com/pub-160", "org_name:Insmask Media Ltd"):
             _assessment(8, "STRONG_EVIDENCE", 1,
                         [("sellers_json|google.com|pub-160", 8.0)]),
@@ -498,14 +498,14 @@ def test_the_payee_is_the_seller_that_declares_this_site(capsys):
     res = _NS(resolution=_NS(graph=_NS(claims=[
         _NS(subject=_NS(value="seller_id:google.com/pub-2201"),
             object=_NS(value="person_name:A Person"),
-            raw={"declared_domain": "storiesdwon.co", "seller_type": "PUBLISHER",
+            raw={"declared_domain": "viewer-site.example", "seller_type": "PUBLISHER",
                  "name_kind": "natural_person"}),
         _NS(subject=_NS(value="seller_id:appnexus.com/1234"),
             object=_NS(value="org_name:Big Network Inc"),
             raw={"declared_domain": "bignetwork.example",
                  "seller_type": "INTERMEDIARY", "name_kind": "organization"}),
     ])))
-    _payee(res, "storiesdwon.co", False)
+    _payee(res, "viewer-site.example", False)
     out = capsys.readouterr().out
     assert "seller_id:google.com/pub-2201" in out
     assert "Big Network Inc" not in out, "other customers of the ad system are not the payee"
@@ -517,12 +517,12 @@ def test_a_www_prefixed_declaration_still_matches(capsys):
     from attribution_suite.cli import _payee
 
     res = _NS(resolution=_NS(graph=_NS(claims=[
-        _NS(subject=_NS(value="seller_id:x/1"), object=_NS(value="org_name:Real Ltd"),
-            raw={"declared_domain": "www.wow.co", "seller_type": "PUBLISHER",
+        _NS(subject=_NS(value="seller_id:x/1"), object=_NS(value="org_name:Example Two Ltd"),
+            raw={"declared_domain": "www.viewer-two.example", "seller_type": "PUBLISHER",
                  "name_kind": "organization"}),
     ])))
-    _payee(res, "wow.co", True)
-    assert "Real Ltd" in capsys.readouterr().out
+    _payee(res, "viewer-two.example", True)
+    assert "Example Two Ltd" in capsys.readouterr().out
 
 
 def test_payee_falls_back_to_the_account_the_site_declares(capsys):
@@ -531,14 +531,14 @@ def test_payee_falls_back_to_the_account_the_site_declares(capsys):
     from attribution_suite.cli import _payee
 
     res = _NS(resolution=_NS(graph=_NS(claims=[
-        _NS(subject=_NS(value="domain:sssthread.com"),
+        _NS(subject=_NS(value="domain:thread-viewer.example"),
             object=_NS(value="seller_id:google.com/pub-544"), raw={}),
         _NS(subject=_NS(value="seller_id:google.com/pub-544"),
             object=_NS(value="person_name:Some Person"),
             raw={"seller_type": "PUBLISHER", "name_kind": "natural_person",
                  "declared_domain": None}),
     ])))
-    _payee(res, "sssthread.com", True)
+    _payee(res, "thread-viewer.example", True)
     out = capsys.readouterr().out
     assert "seller_id:google.com/pub-544" in out
     assert "Some Person" in out
@@ -617,16 +617,16 @@ def test_payee_reads_the_graph_from_the_result(capsys):
     had been resolved."""
     from attribution_suite.cli import _payee
 
-    claim = _NS(subject=_NS(value="domain:pictame.com"),
+    claim = _NS(subject=_NS(value="domain:pic-viewer.example"),
                 object=_NS(value="seller_id:google.com/pub-383"), raw={})
     name = _NS(subject=_NS(value="seller_id:google.com/pub-383"),
-               object=_NS(value="org_name:Relabe LLC"),
+               object=_NS(value="org_name:Example Adtech LLC"),
                raw={"seller_type": "PUBLISHER", "name_kind": "organization",
-                    "declared_domain": "relabe.com"})
+                    "declared_domain": "adrelay.example"})
     res = _NS(graph=_NS(claims=[claim, name]), resolution=_NS(graph=None))
-    _payee(res, "pictame.com", True)
+    _payee(res, "pic-viewer.example", True)
     out = capsys.readouterr().out
-    assert "Relabe LLC" in out
+    assert "Example Adtech LLC" in out
 
 
 def test_payee_accepts_either_claim_direction(capsys):
@@ -651,11 +651,11 @@ def test_a_different_declared_domain_is_flagged_as_the_lead(capsys):
 
     name = _NS(subject=_NS(value="seller_id:x/1"), object=_NS(value="org_name:A Ltd"),
                raw={"seller_type": "PUBLISHER", "name_kind": "organization",
-                    "declared_domain": "relabe.com"})
-    decl = _NS(subject=_NS(value="domain:pictame.com"),
+                    "declared_domain": "adrelay.example"})
+    decl = _NS(subject=_NS(value="domain:pic-viewer.example"),
                object=_NS(value="seller_id:x/1"), raw={})
     res = _NS(graph=_NS(claims=[decl, name]), resolution=_NS(graph=None))
-    _payee(res, "pictame.com", True)
+    _payee(res, "pic-viewer.example", True)
     out = capsys.readouterr().out
     assert "a DIFFERENT site" in out
     assert "matches the seed" not in out
@@ -664,29 +664,29 @@ def test_a_different_declared_domain_is_flagged_as_the_lead(capsys):
 def test_payee_puts_the_direct_line_first_and_labels_resellers(capsys):
     """A RESELLER line means that ad system resells inventory sold by someone
     else — it is not the party being paid. Following the reseller named the
-    reseller (Relabe LLC via Google) instead of the seller (Kredi Uzman via the
+    reseller (Example Adtech LLC via Google) instead of the seller (Example Medya Ltd. via the
     DIRECT line), which is the wrong answer stated confidently."""
     from attribution_suite.cli import _payee
 
     res = _NS(graph=_NS(claims=[
-        _NS(subject=_NS(value="domain:pictame.com"),
+        _NS(subject=_NS(value="domain:pic-viewer.example"),
             object=_NS(value="seller_id:google.com/pub-383"),
             raw={"relationship": "RESELLER"}),
-        _NS(subject=_NS(value="domain:pictame.com"),
-            object=_NS(value="seller_id:relabe.com/6tfv"),
+        _NS(subject=_NS(value="domain:pic-viewer.example"),
+            object=_NS(value="seller_id:adrelay.example/7kqm"),
             raw={"relationship": "DIRECT"}),
         _NS(subject=_NS(value="seller_id:google.com/pub-383"),
-            object=_NS(value="org_name:Relabe LLC"),
+            object=_NS(value="org_name:Example Adtech LLC"),
             raw={"seller_type": "INTERMEDIARY", "name_kind": "organization",
-                 "declared_domain": "relabe.com"}),
-        _NS(subject=_NS(value="seller_id:relabe.com/6tfv"),
-            object=_NS(value="org_name:Kredi Uzman"),
+                 "declared_domain": "adrelay.example"}),
+        _NS(subject=_NS(value="seller_id:adrelay.example/7kqm"),
+            object=_NS(value="org_name:Example Medya Ltd."),
             raw={"seller_type": "PUBLISHER", "name_kind": "organization",
-                 "declared_domain": "krediuzman.com"}),
+                 "declared_domain": "other-site.example"}),
     ]), resolution=_NS(graph=None))
-    _payee(res, "pictame.com", True)
+    _payee(res, "pic-viewer.example", True)
     out = capsys.readouterr().out
-    assert out.index("Kredi Uzman") < out.index("Relabe LLC"), "DIRECT comes first"
+    assert out.index("Example Medya Ltd.") < out.index("Example Adtech LLC"), "DIRECT comes first"
     assert "RESELLER — this ad system RESELLS" in out
     assert "it is not the party being paid" in out
 
@@ -869,3 +869,45 @@ def test_robin_reporting_success_without_output_is_caught(tmp_path, monkeypatch,
 
     assert cli._run_robin("q", tmp_path / "out") is None
     assert "wrote no" in capsys.readouterr().err
+
+
+def test_a_batch_reports_the_worst_outcome_not_a_substitute_code(tmp_path,
+                                                                 monkeypatch,
+                                                                 capsys):
+    """Exit codes are ordered by severity, so a batch takes the worst one.
+
+    Collapsing everything except 0 and 3 to 1 reported "evidence package failed
+    verification" -- what 1 means in the documented table -- for a batch whose
+    real problem was an INVALID result (4). Automation branching on the code
+    was told the wrong thing.
+    """
+    import argparse
+
+    from attribution_suite import cli
+
+    listing = tmp_path / "domains.txt"
+    listing.write_text("a.example\nb.example\nc.example\n")
+
+    codes = iter([0, 3, 4])
+    monkeypatch.setattr(cli, "_run", lambda one: next(codes))
+
+    a = argparse.Namespace(domains=str(listing), domain=None,
+                           out=str(tmp_path / "out"))
+    assert cli._run_batch(a) == 4, "the worst outcome must survive"
+    out = capsys.readouterr().out
+    assert "BATCH SUMMARY" in out
+    assert "failed (exit 4)" in out
+
+
+def test_a_batch_of_clean_runs_still_exits_zero(tmp_path, monkeypatch, capsys):
+    import argparse
+
+    from attribution_suite import cli
+
+    listing = tmp_path / "domains.txt"
+    listing.write_text("a.example\nb.example\n")
+    monkeypatch.setattr(cli, "_run", lambda one: 0)
+    a = argparse.Namespace(domains=str(listing), domain=None,
+                           out=str(tmp_path / "out"))
+    assert cli._run_batch(a) == 0
+    assert "complete" in capsys.readouterr().out

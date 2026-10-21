@@ -1,5 +1,8 @@
 """Suite wiring."""
 
+import sys
+
+import pytest
 
 from attribution_suite import PACKAGES, versions
 from attribution_suite.cli import main
@@ -34,3 +37,141 @@ def test_run_refuses_a_case_without_authorization(tmp_path, capsys):
 def test_registries_delegates_to_component_cli(capsys):
     assert main(["registries", "--jurisdiction", "GB"]) == 0
     assert "Companies House" in capsys.readouterr().out
+
+
+def test_install_mode_distinguishes_pipx_venv_and_system(monkeypatch):
+    """A pipx venv, a plain venv and a system Python are not the same thing.
+
+    Each one has a different correct state and a different remedy, so a check
+    that cannot tell them apart gives the wrong instruction to two of three.
+    """
+    from attribution_suite.cli import install_mode
+
+    cases = {
+        "/root/.local/share/pipx/venvs/attribution-suite": "pipx",
+        "/home/u/.local/pipx/venvs/attribution-suite": "pipx",
+        "/home/u/ncs-venv": "venv",
+        "/usr": "system",
+    }
+    for prefix, expected in cases.items():
+        monkeypatch.setattr(sys, "prefix", prefix)
+        monkeypatch.setattr(sys, "base_prefix", "/usr")
+        assert install_mode() == expected, prefix
+
+
+def test_doctor_does_not_fail_a_pipx_install_over_dependency_commands(
+        monkeypatch, capsys):
+    """pipx exposes only the apps of the package it installed.
+
+    `paytrace` and `handlecorr` belong to the dependencies, so pipx leaves them
+    off PATH by design. Reporting that as a broken install sends a correctly
+    installed user looking for a fault that is not there.
+    """
+    import shutil
+
+    from attribution_suite.cli import main
+
+    monkeypatch.setattr(
+        sys, "prefix", "/root/.local/share/pipx/venvs/attribution-suite")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+    real = shutil.which
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda c, *a, **k: None if c in ("paytrace", "paytrace-index",
+                                         "handlecorr") else real(c, *a, **k))
+
+    main(["doctor"])
+    out = capsys.readouterr().out
+    commands = out.split("COMMANDS")[1].split("LLM PLANNING")[0]
+    for cmd in ("paytrace", "paytrace-index", "handlecorr"):
+        assert f"x  {cmd}" not in commands, f"{cmd} reported as a fault"
+        assert f"-- {cmd}" in commands, f"{cmd} not reported at all"
+    assert "pipx inject attribution-suite" in out, "no remedy offered"
+    # The exit code is not asserted: doctor also makes a live request, and this
+    # test must not depend on the network to prove something about PATH.
+
+
+def test_doctor_explains_pep_668_on_a_system_python(monkeypatch, capsys):
+    """'externally-managed-environment' is the single commonest install failure.
+
+    Debian, Ubuntu, Fedora and Homebrew all refuse a system-wide pip install.
+    The error names venv and pipx generically; doctor names the command for
+    THIS tool.
+    """
+    from attribution_suite.cli import main
+
+    monkeypatch.setattr(sys, "prefix", "/usr")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "externally-managed-environment" in out
+    assert "pipx install" in out
+
+
+def test_extra_hint_matches_the_install_mode(monkeypatch):
+    """An optional extra is installed differently in each environment.
+
+    `pip install "attribution-suite[llm]"` does nothing for a pipx user: pipx
+    adds packages to an existing environment and has no notion of an extra
+    after the fact. On a system Python the pip form is refused outright, so a
+    message that prints only that command sends the user into the error they
+    already hit.
+    """
+    from attribution_suite.install import extra_hint
+
+    monkeypatch.setattr(
+        sys, "prefix", "/root/.local/share/pipx/venvs/attribution-suite")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+    assert extra_hint("llm", "anthropic") == (
+        "pipx inject attribution-suite anthropic")
+
+    monkeypatch.setattr(sys, "prefix", "/home/u/ncs-venv")
+    assert extra_hint("llm", "anthropic") == (
+        'pip install "attribution-suite[llm]"')
+
+    monkeypatch.setattr(sys, "prefix", "/usr")
+    system = extra_hint("mcp", "mcp")
+    assert "externally-managed-environment" in system
+    assert 'pipx install "attribution-suite[mcp]"' in system
+
+
+def test_help_names_the_command_the_user_typed(monkeypatch, capsys):
+    """`attribution-suite --help` opening with "usage: attribution run" sends a
+    first-time reader looking for a subcommand they never typed."""
+    from attribution_suite.cli import main
+
+    monkeypatch.setattr(sys, "argv", ["attribution-suite", "--help"])
+    with pytest.raises(SystemExit):
+        main(["run", "--help"])
+    out = capsys.readouterr().out
+    assert out.startswith("usage: attribution-suite "), out.splitlines()[0]
+    assert "attribution-suite run" not in out
+
+    monkeypatch.setattr(sys, "argv", ["attribution", "run", "--help"])
+    with pytest.raises(SystemExit):
+        main(["run", "--help"])
+    assert capsys.readouterr().out.startswith("usage: attribution run")
+
+
+def test_every_run_option_carries_help_text():
+    """Seventeen bare flags is how `--domains` stayed invisible after it shipped.
+
+    Inspects the real parser rather than its rendered output: argparse wraps
+    long lines, so reading `--help` as text reports documented options as
+    undocumented.
+    """
+    import argparse
+
+    from attribution_suite.cli import build_parser
+
+    ap = build_parser("attribution")
+    subs = [a for a in ap._actions
+            if isinstance(a, argparse._SubParsersAction)]
+    assert subs, "no subcommands found; the parser shape changed"
+    run = subs[0].choices["run"]
+    missing = [
+        "/".join(a.option_strings) for a in run._actions
+        if a.option_strings and a.help in (None, "")
+        and a.help is not argparse.SUPPRESS
+    ]
+    assert not missing, f"options with no help text: {missing}"

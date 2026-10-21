@@ -376,7 +376,7 @@ def test_pivot_loop_recovers_identity_from_a_sibling():
     clean = ('<script src="https://www.googletagmanager.com/gtag/js?id='
              'G-SHARED123"></script><h1>Welcome</h1>')
     sibling = ('<script src="https://www.googletagmanager.com/gtag/js?id='
-               'G-SHARED123"></script><p>Operated by Nguyen Van An</p>')
+               'G-SHARED123"></script><p>Operated by Jane Ann Doe</p>')
 
     assert not extract_artifacts(clean, "seed.example").yielded_identity
 
@@ -401,7 +401,7 @@ def test_pivot_loop_recovers_identity_from_a_sibling():
     import asyncio
     r = asyncio.run(pivot_expand("seed.example", F(), index=Idx()))
     assert "sib.example" in r.identity_found_on
-    assert any(c.object.value == "Nguyen Van An" for c in r.claims)
+    assert any(c.object.value == "Jane Ann Doe" for c in r.claims)
 
 
 def test_pivot_claims_carry_less_weight_than_seed_claims():
@@ -439,7 +439,7 @@ def test_extracted_artifacts_feed_the_scoring_model():
     from paytrace import extract_artifacts
 
     body = ('https://abcdef0123456789abcdef0123456789@o1.ingest.sentry.io/1'
-            '<p>Operated by Nguyen Van An</p>')
+            '<p>Operated by Jane Ann Doe</p>')
     ex = extract_artifacts(body, "x.example")
     a = assess(ex.claims, lambda i: 1)
     assert a.band.value in ("WEAK", "LIMITED_EVIDENCE", "MODERATE_EVIDENCE", "STRONG_EVIDENCE",

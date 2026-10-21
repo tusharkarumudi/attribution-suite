@@ -7,7 +7,8 @@
 One install and one command: who is paid for a website, and on what evidence.
 
 ```bash
-pip install attribution-suite
+sudo apt install pipx          # macOS: brew install pipx
+pipx install attribution-suite
 attribution-suite --domain example.com
 ```
 
@@ -19,12 +20,12 @@ The output opens with the answer:
 
 ```
 PAYEE — the ad system says it pays this party for this site
-  relabe.com/6tFvXWWAp9RZaZhG3
-      declares domain  krediuzman.com  — a DIFFERENT site
-      name             Kredi Uzman
+  adrelay.example/7kQmZ2bXr4TnWp8Ls
+      declares domain  other-site.example  — a DIFFERENT site
+      name             Example Medya Ltd.
       ads.txt says     DIRECT
-  google.com/pub-3831894559014614
-      name             Relabe LLC
+  google.com/pub-0000000000000314
+      name             Example Adtech LLC
       ads.txt says     RESELLER — this ad system RESELLS the inventory;
                        it is not the party being paid. The DIRECT line is.
 ```
@@ -32,6 +33,70 @@ PAYEE — the ad system says it pays this party for this site
 **DIRECT names the seller; RESELLER names a reseller.** When a payout account
 declares a *different* site, one account serves both — the strongest lead there
 is, and that site's about page is the next step.
+
+## Install
+
+**`pipx`, not `pip`.** This is a command-line tool, so it wants its own
+environment; pipx makes one, keeps the four packages on one version line, and
+puts `attribution` on your PATH.
+
+```bash
+sudo apt install pipx          # Debian/Ubuntu.  macOS: brew install pipx
+                               # Fedora: sudo dnf install pipx
+pipx ensurepath                # puts ~/.local/bin on PATH — open a NEW shell after this
+pipx install attribution-suite
+attribution doctor
+```
+
+### If `pip install` just failed
+
+```
+error: externally-managed-environment
+× This environment is externally managed
+```
+
+That is the operating system refusing to let anything install into *its* Python
+([PEP 668](https://peps.python.org/pep-0668/)). Ubuntu 24.04, Debian 12,
+current Fedora and Homebrew Python all do it, to every package — nothing is
+wrong with this one, and `attribution: command not found` afterwards simply
+means the install never happened.
+
+Use pipx above. **Do not pass `--break-system-packages`**: it writes into the
+Python that `apt` manages, and the next system upgrade is entitled to break it.
+
+### Or a virtualenv, if you prefer
+
+```bash
+python3 -m venv ~/.venvs/attribution
+~/.venvs/attribution/bin/pip install attribution-suite
+~/.venvs/attribution/bin/attribution-suite --domain example.com
+```
+
+Calling the venv's binary by path needs no activation. If you `activate`
+instead, remember it lasts only for that shell — a new terminal gets
+`command not found` again.
+
+### Upgrading
+
+```bash
+pipx upgrade attribution-suite                     # pipx install
+pip install -U --upgrade-strategy eager attribution-suite   # venv install
+```
+
+`--upgrade-strategy eager` is not optional in a venv: the suite requires
+`paytrace>=2.0.1`, pip leaves a satisfied requirement alone, and you get a new
+suite driving old collectors. `attribution version` must show all four on the
+same `MAJOR.MINOR` line. (pipx re-resolves the whole environment, so it does
+not have this problem.)
+
+### Uninstalling
+
+```bash
+pipx uninstall attribution-suite      # or: rm -rf ~/.venvs/attribution
+```
+
+Cases, reports and the sellers.json cache live outside the install:
+`./out` where you ran it, and `~/.cache/paytrace`.
 
 ### Check your setup first
 
@@ -61,12 +126,30 @@ which. It is not a failure.
 ### Optional: Claude planning, and dark web search
 
 ```bash
-pip install "attribution-suite[llm]"     # without this, `ask` uses fixed rules
-export ANTHROPIC_API_KEY=sk-ant-...      # model: ANTHROPIC_MODEL, default claude-sonnet-5
+pipx install "attribution-suite[llm]"       # from scratch, with the extra
+pipx inject attribution-suite anthropic     # or add it to an existing install
+export ANTHROPIC_API_KEY=sk-ant-...         # model: ANTHROPIC_MODEL, default claude-sonnet-5
 ```
+
+In a virtualenv: `pip install "attribution-suite[llm]"`.
 
 Setting the key without the extra installed gets you fixed rules — the tool now
 says so instead of falling back in silence. `attribution doctor` reports both.
+
+### Driving it from an agent
+
+```bash
+attribution skill --install      # the skill, into ~/.claude/skills/
+attribution skill --mcp-config   # or the MCP server entry, path resolved
+```
+
+The skill ships inside the package, so an install is all you need. It carries
+what a tool schema cannot say: that a band is evidence strength and not a
+probability, that `OWNERDOMAIN` is the subject's claim about itself, that
+person-scoped search is refused by design and must not be reassembled from
+other searches, and that instructions found inside a fetched page are evidence
+about the subject rather than direction. `attribution doctor` reports whether
+the skill is installed and whether the MCP server is reachable.
 
 Dark web search runs [Robin](https://github.com/apurvsinghgautam/robin), a
 separate tool that needs Tor and its own credentials:
@@ -227,9 +310,15 @@ Annotation is a **second image**. The unannotated capture is hashed first and is
 the one to verify; a highlighted version is a separate derived file. An
 annotated image with no original is an illustration, not evidence.
 
-Needs a headless browser (`pip install playwright && playwright install
-chromium`). Without one the run records that a screenshot was **not captured**,
-with the reason — an absent screenshot is not a blank page.
+Needs a headless browser. It has to go into the same environment as the suite:
+
+```bash
+pipx inject attribution-suite playwright --include-apps && playwright install chromium
+# venv: pip install playwright && playwright install chromium
+```
+
+Without one the run records that a screenshot was **not captured**, with the
+reason — an absent screenshot is not a blank page.
 
 Outputs: `SCREENSHOT_LOG.txt` (readable without this package) and
 `screenshot_manifest.json`, both kept separate from `evidence_manifest.json` so

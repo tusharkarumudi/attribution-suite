@@ -2,6 +2,75 @@
 
 ## [Unreleased]
 
+## [2.0.20] - 2026-10-20
+
+- **No real-world case data in any of the four repositories.** The README --
+  and therefore the PyPI project page -- carried the payee, seller account,
+  declared domain and company name of a site that had actually been
+  investigated. Test fixtures carried more of the same. All of it is now
+  fictional, and `scripts/scan_for_real_world_data.py` keeps it that way:
+  identifier classes that denote one specific account or legal entity must
+  match a placeholder form, and the specific values removed here can never
+  reappear. The denylist is stored as truncated hashes, because a denylist
+  written out in full would republish exactly what it exists to keep out.
+  `VERIFY.sh` runs the scan over the bundle being shipped, and the check has
+  controls proving it still fires.
+- **The skill ships inside the package.** It lived in a top-level directory
+  that existed only in a git checkout, so everyone who followed the quickstart
+  and installed from PyPI got a tool whose agent-facing half was missing, with
+  nothing saying so. New `attribution skill` prints where it is,
+  `--install` copies it to `~/.claude/skills/entity-attribution`, and
+  `--mcp-config` prints the host entry with the path resolved.
+- `doctor` reports the agent surface: whether the skill is installed for a
+  host, whether the MCP SDK and server are present, and what to run if not.
+- The skill's own description advertised "calibrated confidence" in one of two
+  divergent copies -- the single line a host reads when deciding to use it, and
+  the opposite of this toolkit's central caveat. One canonical copy now, and a
+  test that the description cannot claim calibration.
+- The skill said how to interpret a result but never how to produce one: no
+  commands, no `--authorization`, no output paths, no exit codes. A model could
+  describe a finding it had no way to obtain.
+- The planner's reply is validated: malformed JSON, a non-object and a tool
+  name that does not exist each end the plan with a reason instead of raising.
+- `--help` names the command actually typed -- `attribution-suite --help`
+  opened with `usage: attribution run`, a command the reader never used and
+  cannot type -- and every `run` option carries a description, enforced by a
+  test against the real parser rather than its rendered output.
+- A batch exits with the **worst** outcome of its runs. Anything other than 0
+  or 3 was collapsed to 1, which the documented table defines as "evidence
+  package failed verification", so a batch containing an INVALID result
+  reported a verification failure that never happened.
+- `DEPLOYMENT.md` and the demo runbook rebuilt against this build, with every
+  command and every block of output run and copied from the terminal. The
+  runbook had claimed a portfolio size its own command does not print.
+- **Install is `pipx install attribution-suite`.** `pip install` is refused
+  outright on Ubuntu 24.04, Debian 12, current Fedora and Homebrew Python
+  (`error: externally-managed-environment`, PEP 668), so the first command in
+  the README could not work on a stock machine, and the
+  `attribution: command not found` that followed looked like a broken package.
+  README, `DEPLOYMENT.md`, the MCP and screenshot instructions and the
+  verification guide now all use pipx, with a virtualenv as the documented
+  alternative and the error text quoted so a search for it lands on the fix.
+  `--break-system-packages` is called out as the wrong answer.
+- `doctor` reports the install mode — `pipx`, `venv` or `system` — and adapts.
+  On a system Python it explains the PEP 668 refusal and prints the pipx
+  commands. Under pipx, the dependencies' commands (`paytrace`,
+  `paytrace-index`, `handlecorr`) are reported as `--` with the `pipx inject`
+  remedy instead of `x`: pipx exposes only the apps of the package it
+  installed, so a correct install was being reported as three faults.
+- The minimisation leak test asserted that a seed value appears nowhere in any
+  artifact **as a bare substring**, which no hashing scheme can deliver: the
+  3-character seed `abc` is three hex characters, and a random 32-hex claim id
+  contains it 0.78% of the time -- about one CI run in eleven. It failed on a
+  correct build, pointing at the id `e5020dfabc32471cb30f6ef7c32b098a`, with
+  the seed itself properly hashed to `handle:#099b030c...`. The check now uses
+  the token boundaries that `minimise.scrub` actually implements, with two
+  controls: five shapes of genuine leak that must still be caught, and the
+  colliding id from that CI run forced deterministically so the flake cannot
+  return unnoticed.
+- The upgrade line for each install mode, including why `--upgrade-strategy
+  eager` is mandatory in a virtualenv and unnecessary under pipx.
+
 ## [2.0.19] - 2026-09-27
 
 - `--robin-query` runs Robin and imports the result. Robin could previously
