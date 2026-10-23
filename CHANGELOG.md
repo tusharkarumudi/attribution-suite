@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [2.0.21] - 2026-10-21
+
+- **The planted-identifier checks now run on every investigation.** The header
+  of `runner.py` said adversarial checks run before scoring. Nothing called
+  them: `assess_identifier` and `apply_assessments` had one caller in the whole
+  project and it was the demo script, so the demo showed a defence the pipeline
+  did not apply. The pass runs between collection and scoring, bounded to
+  `ADVERSARIAL_MAX` identifiers that bear on the seed, reports
+  `adversarial_assessed` and `adversarial_demoted`, records each demotion in
+  the verification trail as a FILTER step with its reason, and warns when
+  anything was demoted. `--no-adversarial` skips it, and the result then says
+  so -- a weaker result and a full one must not be indistinguishable.
+- The demo script ships in the repository (`demo/ncs_demo.py`) and every beat
+  is tested in a subprocess, which is what a presenter runs. It lived outside
+  every repository, which is how its claims drifted from the tool: a beat that
+  demoted only one orientation of a claim, a refusal message shadowed by a
+  generic one so it could never print, and a runbook asserting a portfolio size
+  the command does not produce. The portfolio count is asserted now.
+- New `injection` beat: the same poisoned world investigated twice, once with
+  the agent's guards off and once on. The naive run stops two steps in and
+  adopts the entity named in the site's own `ads.txt` comment; the defended run
+  keeps reading the records and reaches the entity the ad system names. Both
+  flag the attempt.
+- The demo writes its corpus under the directory you run from, not next to the
+  script, so running the copy that ships with the package no longer writes a
+  database into the installed package directory. `NCS_DEMO_DIR` overrides it.
+- A test asserting that blocked retrievals name their URL read
+  `res.stats["warnings"]`, a key that does not exist, so it passed vacuously
+  from the day it was written. It failed for the first time when a change
+  caused something to be blocked -- the one case it existed to check.
+
 ## [2.0.20] - 2026-10-20
 
 - **No real-world case data in any of the four repositories.** The README --

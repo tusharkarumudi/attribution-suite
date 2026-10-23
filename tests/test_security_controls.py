@@ -187,11 +187,20 @@ def test_cross_package_pins_are_enforced_not_advisory(pkg):
     """Docs said the four move together while metadata allowed any newer
     version, so ordinary pip resolution could install a mixed set."""
     text = (_repo(pkg) / "pyproject.toml").read_text()
-    # Bounded above (<2.1), so pip cannot assemble a mixed MINOR set, and
-    # bounded below at 2.0.1, excluding the withdrawn 2.0.0.
-    assert "attribution-graph>=2.0.1,<2.1" in text
-    assert not re.search(r'"attribution-graph>=[^"]*"', text.replace(
-        '"attribution-graph>=2.0.1,<2.1"', "")), "unbounded pin"
+    # The PROPERTY, not a literal string: bounded above (<2.1), so pip cannot
+    # assemble a mixed MINOR set, and bounded below at 2.0.1 or later, which
+    # excludes the withdrawn 2.0.0. Asserting the exact text made a legitimate
+    # tightening -- raising a floor because the package started calling a newer
+    # API -- fail a test about something else entirely.
+    from packaging.version import Version
+
+    pins = re.findall(r'"attribution-graph([^"]*)"', text)
+    assert pins, "no attribution-graph pin at all"
+    for pin in pins:
+        m = re.fullmatch(r">=(\d+\.\d+\.\d+),<2\.1", pin.strip())
+        assert m, f"pin is not lower- and upper-bounded: attribution-graph{pin}"
+        assert Version(m.group(1)) >= Version("2.0.1"), \
+            f"floor admits the withdrawn 2.0.0: {pin}"
 
 
 def test_mixed_versions_are_detected():
@@ -1014,4 +1023,12 @@ def test_suite_cannot_resolve_the_broken_published_paytrace():
     fixture silently became clean under a wheel install. PyPI versions are
     immutable, so the fix is 2.0.1 and the suite must require it."""
     text = (ROOT / "attribution-suite" / "pyproject.toml").read_text()
-    assert '"paytrace>=2.0.1,<2.1"' in text
+    from packaging.version import Version
+
+    pins = re.findall(r'"paytrace([^"]*)"', text)
+    assert pins, "no paytrace pin at all"
+    for pin in pins:
+        m = re.fullmatch(r">=(\d+\.\d+\.\d+),<2\.1", pin.strip())
+        assert m, f"pin is not lower- and upper-bounded: paytrace{pin}"
+        assert Version(m.group(1)) >= Version("2.0.1"), \
+            f"floor admits the broken 2.0.0: {pin}"

@@ -10,6 +10,7 @@ be presented).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,59 @@ class SuiteResult:
         return "\n".join(L)
 
 
+#: How many identifiers one run will verify. Each costs up to three
+#: retrievals -- the live page, an archive CDX query and the ad system's
+#: sellers.json -- so an unbounded pass would quietly spend a request budget
+#: on verification instead of collection.
+ADVERSARIAL_MAX = 12
+
+
+def _seed_domain(scope) -> str:
+    """The domain this case is about, if it is about one."""
+    for s in scope.seeds:
+        if s.startswith("domain:"):
+            return s.split(":", 1)[1]
+        if ":" not in s:
+            return s
+    return ""
+
+
+def _assessable_identifiers(graph, scope, index, *, limit: int):
+    """Identifiers worth verifying, as (key, scheme, value, adsystem, id, sharing).
+
+    Only identifiers that support a claim about the seed. Verifying every
+    identifier in the graph would spend the budget proving things about third
+    parties, which is the same mistake the findings output used to make.
+    """
+    from attribution_graph import IdKind
+
+    seed = _seed_domain(scope)
+    out, seen = [], set()
+    for c in graph.claims:
+        sides = [s for s in (c.subject, c.object) if getattr(s, "kind", None)]
+        if seed and not any(s.kind is IdKind.DOMAIN and s.value == seed
+                            for s in sides):
+            continue
+        for s in sides:
+            if s.value in seen:
+                continue
+            if s.kind is IdKind.ANALYTICS_ID and ":" in s.value:
+                scheme, value = s.value.split(":", 1)
+                sharing = []
+                if index is not None:
+                    with contextlib.suppress(Exception):
+                        sharing = index.domains_for_analytics(scheme, value)
+                seen.add(s.value)
+                out.append((s.value, scheme, value, None, None, sharing))
+            elif s.kind is IdKind.SELLER_ID and "/" in s.value:
+                adsys, sid = s.value.split("/", 1)
+                seen.add(s.value)
+                out.append((s.value, "seller", sid, adsys, sid, []))
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
 def run_case(
     case_path: str | Path,
     outdir: str | Path = "./out",
@@ -77,6 +131,7 @@ def run_case(
     show_scores: bool = True,
     evidence: bool = True,
     concurrency: int = 6,
+    adversarial: bool = True,
 ) -> SuiteResult:
     """Run the full chain from one case file."""
     from paytrace import AdsTxtIndex, EgressPool, Fetcher
@@ -153,9 +208,10 @@ def run_case(
                 "NO retrieval succeeded. Any absence in this report means the "
                 "source was not reached, not that it holds no record.")
 
+    ads_index = None
     if corpus_index:
-        engine.index = CompositeIndex(AdsTxtIndex(str(corpus_index)),
-                                      InMemoryIndex(engine.graph))
+        ads_index = AdsTxtIndex(str(corpus_index))
+        engine.index = CompositeIndex(ads_index, InMemoryIndex(engine.graph))
     else:
         warnings.append(
             "no corpus index supplied — selectivity counts come from this case "
@@ -215,14 +271,93 @@ def run_case(
     # second asyncio.run() fails on a real network -- its connections belong
     # to the first loop, now closed -- with "Event loop is closed". Mock
     # transports hold no such connections, which is why tests never saw it.
+    # --- adversarial pass --------------------------------------------------- #
+    # Runs between collection and scoring, which is the only window where it
+    # can matter: `resolve` consumes claim weights, so an identifier demoted
+    # after scoring has already counted in full. This module existed and was
+    # called by nothing but the demo script, so every real run scored planted
+    # identifiers at face value while the header of this file said otherwise.
+    adv_state: dict[str, Any] = {"assessed": 0, "demoted": 0, "verdicts": {},
+                                 "skipped": ""}
+
+    async def _adversarial(graph) -> None:
+        from paytrace.adversarial import apply_assessments, assess_identifier
+
+        candidates = _assessable_identifiers(graph, scope, ads_index,
+                                             limit=ADVERSARIAL_MAX)
+        if not candidates:
+            adv_state["skipped"] = "no analytics or seller identifiers collected"
+            return
+        # "More established" needs a corpus to mean anything: how many ad
+        # accounts a property declares separates a scraper from a publisher.
+        holder_counts: dict[str, int] = {}
+        if ads_index is not None:
+            for _i, _s, _v, _a, _sid, sharing in candidates:
+                for d in sharing:
+                    if d not in holder_counts:
+                        with contextlib.suppress(Exception):
+                            holder_counts[d] = len(ads_index.sellers_for_domain(d))
+        assessments = {}
+        for ident, scheme, value, adsys, sid, sharing in candidates:
+            try:
+                a = await assess_identifier(
+                    fetcher, _seed_domain(scope) or ident, scheme, value,
+                    adsystem=adsys, seller_id=sid,
+                    sharing_domains=sharing,
+                    holder_counts=holder_counts)
+            except Exception as e:                  # a check must not end a run
+                trail.add(StepKind.INFERENCE,
+                          f"planted-identifier check could not run for "
+                          f"{value}: {type(e).__name__}: {e}",
+                          detail="the identifier keeps its original weight")
+                continue
+            # Keyed by the identifier AS THE GRAPH HOLDS IT ("ga4:G-XXXX"),
+            # not by the bare value the checks take. Keyed by the bare value,
+            # nothing matched and the pass assessed identifiers it then failed
+            # to demote -- visible only as assessed>0 with demoted=0.
+            assessments[ident] = a
+            adv_state["verdicts"][a.verdict.value] = (
+                adv_state["verdicts"].get(a.verdict.value, 0) + 1)
+        apply_assessments(graph.claims, assessments)
+        adv_state["assessed"] = len(assessments)
+        adv_state["demoted"] = sum(
+            1 for c in graph.claims if c.raw.get("demoted"))
+        for ident, a in assessments.items():
+            if a.should_demote:
+                # FILTER is the trail's own kind for "dropped or demoted,
+                # with reason", which is exactly what happened.
+                trail.add(StepKind.FILTER,
+                          f"planted-identifier check demoted {ident}: "
+                          f"{a.verdict.value}",
+                          detail="; ".join(a.reasons))
+
     async def _collect():
         try:
-            return await engine.run()
+            return await engine.run(
+                before_resolve=_adversarial if adversarial else None)
         finally:
             await fetcher.aclose()
 
     resolution = asyncio.run(_collect())
     stats["requests"] = fetcher.count
+    if adversarial:
+        stats["adversarial_assessed"] = adv_state["assessed"]
+        stats["adversarial_demoted"] = adv_state["demoted"]
+        if adv_state["verdicts"]:
+            stats["adversarial_verdicts"] = ", ".join(
+                f"{k}={v}" for k, v in sorted(adv_state["verdicts"].items()))
+        if adv_state["demoted"]:
+            warnings.append(
+                f"{adv_state['demoted']} claim(s) were demoted to weight 0 by "
+                "the planted-identifier checks: the identifier is present but "
+                "is not load-bearing, not reciprocated, or has no history. "
+                "They are kept in the record, because manufacturing "
+                "attribution is itself evidence about the operator.")
+    else:
+        stats["adversarial"] = "skipped (--no-adversarial)"
+        warnings.append(
+            "planted-identifier checks were skipped, so an identifier planted "
+            "to manufacture a link counts at full weight in this result")
 
     # --- handles ------------------------------------------------------------ #
     if handles or robin_claims:

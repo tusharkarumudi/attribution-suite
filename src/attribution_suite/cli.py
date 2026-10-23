@@ -716,6 +716,7 @@ def _run(a: argparse.Namespace) -> int:
             opencti=a.opencti or None, robin=a.robin or None,
             show_scores=not a.no_scores,
             evidence=not a.no_evidence, concurrency=a.concurrency,
+            adversarial=not getattr(a, "no_adversarial", False),
         )
     except PolicyError as e:
         print(f"policy error: {e}", file=sys.stderr)
@@ -907,6 +908,11 @@ def build_parser(prog: str = "attribution") -> argparse.ArgumentParser:
                    help=argparse.SUPPRESS)
     g_out.add_argument("--no-scores", action="store_true",
                    help="omit confidence figures from the report")
+    g_scope.add_argument("--no-adversarial", action="store_true",
+                   help="skip the planted-identifier checks. They cost up to "
+                        "three retrievals per identifier; without them an "
+                        "identifier planted to manufacture a link counts at "
+                        "full weight")
     g_out.add_argument("--no-evidence", action="store_true",
                    help="skip the evidence package: no captures, hashes or "
                         "timestamps, so the result cannot be independently "

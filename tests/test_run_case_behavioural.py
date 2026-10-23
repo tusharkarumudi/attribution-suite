@@ -554,7 +554,13 @@ def test_blocked_urls_are_named_not_just_counted(monkeypatch, tmp_path):
 
     _real_world(monkeypatch)
     res = runner.run_case(str(_case(tmp_path)), tmp_path / "out")
-    blocked = [w for w in res.stats.get("warnings", []) if "blocked:" in w]
+    # `res.warnings`, not `res.stats["warnings"]` -- stats has no such key, so
+    # this test read an empty list and passed vacuously from the day it was
+    # written. It only started failing when a later change caused something to
+    # be blocked for the first time, which is the one case it was meant to
+    # check.
+    assert "warnings" not in res.stats, "stats now carries warnings; use it"
+    blocked = [w for w in res.warnings if "blocked:" in w]
     if res.stats.get("collection_blocked"):
         assert blocked, "a blocked retrieval must name its URL"
         assert any("http" in w for w in blocked)
@@ -911,3 +917,119 @@ def test_a_batch_of_clean_runs_still_exits_zero(tmp_path, monkeypatch, capsys):
                            out=str(tmp_path / "out"))
     assert cli._run_batch(a) == 0
     assert "complete" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# The adversarial pass must actually run inside a run
+# --------------------------------------------------------------------------- #
+
+def test_the_adversarial_pass_runs_before_scoring(tmp_path, monkeypatch):
+    """The header of runner.py said adversarial checks run before scoring.
+
+    Nothing called them. `assess_identifier` and `apply_assessments` had
+    exactly one caller in the whole project -- the demo script -- so every real
+    run scored planted identifiers at face value while the demo showed them
+    being caught. The ordering matters because `resolve` consumes claim
+    weights: an identifier demoted after scoring has already counted in full.
+    """
+    import attribution_graph.engine as engine_mod
+
+    order: list[str] = []
+    real_resolve = engine_mod.resolve
+
+    def spy_resolve(*a, **k):
+        order.append("resolve")
+        return real_resolve(*a, **k)
+
+    monkeypatch.setattr(engine_mod, "resolve", spy_resolve)
+
+    import paytrace.adversarial as adv
+
+    async def fake_assess(fetcher, domain, scheme, value, **kw):
+        order.append(f"assess:{value}")
+        return adv.Assessment(identifier=value, verdict=adv.Verdict.INERT)
+
+    monkeypatch.setattr(adv, "assess_identifier", fake_assess)
+
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: ADV-1\nauthorization: test\n"
+        f"seeds: [domain:victim.example]\nmax_requests: 20\n"
+        # Without an explicit path the audit trail defaults to
+        # ./audit.jsonl -- which under pytest is the repository
+        # root, and the archive is built from the tree.
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    from attribution_suite.runner import run_case
+    run_case(case, tmp_path / "out", evidence=False)
+
+    assert "resolve" in order, "scoring never ran"
+    if any(s.startswith("assess:") for s in order):
+        assert order.index("resolve") > max(
+            i for i, s in enumerate(order) if s.startswith("assess:")), \
+            "scoring ran before the adversarial checks"
+
+
+def test_a_demoted_claim_is_reported_not_silently_dropped(tmp_path,
+                                                          monkeypatch):
+    """A demotion changes the result, so the run has to say it happened."""
+    import paytrace.adversarial as adv
+    from attribution_graph import Claim, Identifier, IdKind, Predicate, Reliability
+
+    async def fake_assess(fetcher, domain, scheme, value, **kw):
+        return adv.Assessment(identifier=value, verdict=adv.Verdict.INERT,
+                              reasons=["only inside an HTML comment"])
+
+    monkeypatch.setattr(adv, "assess_identifier", fake_assess)
+
+    import attribution_graph.engine as engine_mod
+    real_run = engine_mod.Engine.run
+
+    async def run_with_a_planted_claim(self, *, before_resolve=None):
+        # One claim about the seed, carrying an analytics id on the SUBJECT
+        # side -- the shape the real collectors emit, and the shape that used
+        # to escape demotion entirely.
+        self.graph.add_claim(Claim(
+            subject=Identifier(IdKind.ANALYTICS_ID, "ga4:G-PLANTED01"),
+            predicate=Predicate.SHARES_ANALYTICS_ID,
+            object=Identifier(IdKind.DOMAIN, "victim.example"),
+            collector="analytics", source_url="https://victim.example/",
+            reliability=Reliability.AUTHORITATIVE,
+            correlation_group="analytics|victim.example"))
+        return await real_run(self, before_resolve=before_resolve)
+
+    monkeypatch.setattr(engine_mod.Engine, "run", run_with_a_planted_claim)
+
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: ADV-2\nauthorization: test\n"
+        f"seeds: [domain:victim.example]\nmax_requests: 20\n"
+        # Without an explicit path the audit trail defaults to
+        # ./audit.jsonl -- which under pytest is the repository
+        # root, and the archive is built from the tree.
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    from attribution_suite.runner import run_case
+    res = run_case(case, tmp_path / "out", evidence=False)
+
+    assert res.stats.get("adversarial_assessed", 0) >= 1, res.stats
+    assert res.stats.get("adversarial_demoted", 0) >= 1, res.stats
+    assert any("demoted to weight 0" in w for w in res.warnings), res.warnings
+
+
+def test_skipping_the_checks_is_stated_in_the_result(tmp_path):
+    """--no-adversarial is a weaker result, and silence about it would make the
+    two runs indistinguishable."""
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: ADV-3\nauthorization: test\n"
+        f"seeds: [domain:victim.example]\nmax_requests: 10\n"
+        # Without an explicit path the audit trail defaults to
+        # ./audit.jsonl -- which under pytest is the repository
+        # root, and the archive is built from the tree.
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    from attribution_suite.runner import run_case
+    res = run_case(case, tmp_path / "out", evidence=False, adversarial=False)
+    assert res.stats.get("adversarial") == "skipped (--no-adversarial)"
+    assert any("planted to manufacture a link" in w for w in res.warnings)

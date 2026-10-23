@@ -175,3 +175,34 @@ def test_every_run_option_carries_help_text():
         and a.help is not argparse.SUPPRESS
     ]
     assert not missing, f"options with no help text: {missing}"
+
+
+def test_the_declared_minimums_match_the_apis_this_package_calls():
+    """A pin is a compatibility statement, and these two are load-bearing.
+
+    The runner calls `Engine.run(before_resolve=...)` and passes
+    `sharing_domains`/`holder_counts` into `assess_identifier`. Under the old
+    `>=2.0.1` pins, `pipx upgrade attribution-suite` alone resolved to siblings
+    without those parameters, and every run died with a TypeError that named
+    an internal keyword argument.
+    """
+    import inspect
+    import tomllib
+    from pathlib import Path
+
+    from attribution_graph import Engine
+    from paytrace.adversarial import assess_identifier
+
+    assert "before_resolve" in inspect.signature(Engine.run).parameters, \
+        "the installed attribution-graph is older than the pin requires"
+    params = inspect.signature(assess_identifier).parameters
+    for name in ("sharing_domains", "holder_counts"):
+        assert name in params, f"the installed paytrace has no {name}"
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    deps = tomllib.loads(pyproject.read_text())["project"]["dependencies"]
+    joined = " ".join(deps)
+    assert "attribution-graph>=2.0.6" in joined, \
+        "before_resolve needs attribution-graph 2.0.6; the pin still admits older"
+    assert "paytrace>=2.0.24" in joined, \
+        "assess_identifier's new arguments need paytrace 2.0.24"

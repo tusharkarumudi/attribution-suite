@@ -148,3 +148,6 @@ coverage.xml
 .DS_Store
 Thumbs.db
 .verify-venv/
+
+# the demo writes its corpus here if run from the repo root
+ncs-demo/
