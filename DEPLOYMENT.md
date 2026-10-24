@@ -257,11 +257,18 @@ not in English.
 Two surfaces, and a host that can take both should:
 
 ```bash
-attribution skill --install       # the rules -> ~/.claude/skills/entity-attribution
+attribution skill --bundle        # one archive: skill + slash command + MCP config
+attribution skill --install       # the rules -> ~/.claude/skills/ad-attribution
 attribution skill --mcp-config    # the tools: host entry, absolute path resolved
 pipx inject attribution-suite mcp # the MCP server itself, if not already present
 attribution-mcp                   # stdio, when a host wants to launch it directly
 ```
+
+For a host with no shell, MCP is the only route that can actually investigate;
+`uvx --from "attribution-suite[mcp]" attribution-mcp` needs nothing installed
+beforehand. The server builds against either generation of the `mcp` SDK --
+2.x moved registration from decorators to constructor callbacks, which stopped
+the server starting at all until 2.0.22.
 
 The skill ships **inside the installed package**
 (`attribution_suite/skill/SKILL.md`), so an install is all that is needed. It previously lived in a top-level directory that existed only in a git

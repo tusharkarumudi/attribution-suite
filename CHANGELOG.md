@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [2.0.22] - 2026-10-23
+
+- **The MCP server could not start.** `mcp` 2.x replaced the 1.x decorator
+  registration (`@app.list_tools()`) with constructor callbacks, and the
+  handlers were bound at import, so `attribution-mcp` died with
+  `AttributeError: 'Server' object has no attribute 'list_tools'` before
+  printing anything -- against exactly the SDK `pipx inject` and `uvx` install
+  today. Every MCP test here inspected the source as text, so nothing noticed
+  the module could not be imported. The server is now built by
+  `build_server()`, which registers with whichever generation is installed,
+  `mcp` is in the `dev` extra so CI imports it, and three tests build the
+  server, list the tools and call one.
+- **`attribution skill --bundle`** writes `ad-attribution.zip`: the skill, a
+  `/ad-attribution` slash command, an MCP config and an INSTALL.md covering
+  every route. The archive's top level is the skill directory, which is what a
+  host that accepts an uploaded skill requires, and the build is deterministic
+  so a checksum of it means something.
+- The skill is named `ad-attribution`, so an explicit `/ad-attribution`
+  matches it. A copy installed under the old `entity-attribution` name is not
+  removed; delete that directory if you had one.
+- `INSTALL.md` states plainly what a bundle attached to a chat with no shell
+  can and cannot do: it carries the method and the reporting rules, not the
+  capability. The capability needs the MCP server or a host with a shell.
+
 ## [2.0.21] - 2026-10-21
 
 - **The planted-identifier checks now run on every investigation.** The header

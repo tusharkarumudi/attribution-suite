@@ -30,7 +30,7 @@ in a virtualenv, give the host the absolute path to the binary instead.
 
 ```bash
 attribution skill                      # where it is, and what is in it
-attribution skill --install            # -> ~/.claude/skills/entity-attribution
+attribution skill --install            # -> ~/.claude/skills/ad-attribution
 attribution skill --mcp-config         # the host entry for MCP, path resolved
 ```
 

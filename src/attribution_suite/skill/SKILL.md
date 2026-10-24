@@ -1,5 +1,5 @@
 ---
-name: entity-attribution
+name: ad-attribution
 description: >-
   Investigate which legal entity operates a domain or ad-tech seller account,
   and how strongly the evidence supports it, with full source provenance and a

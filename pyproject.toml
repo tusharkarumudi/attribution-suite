@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "attribution-suite"
-version = "2.0.21"
+version = "2.0.22"
 description = "One install and one CLI over the attribution-graph toolchain"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,7 +34,10 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
 llm = ["anthropic>=0.40"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6"]
+# `mcp` is in dev so CI actually imports the server. Without it the MCP
+# tests skipped everywhere, and the server shipped broken against the
+# SDK generation that `pipx inject` installs.
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6", "mcp>=1.0"]
 
 [project.scripts]
 attribution-mcp = "attribution_suite.mcp_server:main"

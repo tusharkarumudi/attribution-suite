@@ -8,7 +8,7 @@ git clone.
 
 ```bash
 attribution skill                      # where it is, and what is in it
-attribution skill --install            # -> ~/.claude/skills/entity-attribution
+attribution skill --install            # -> ~/.claude/skills/ad-attribution
 attribution skill --install --to DIR   # somewhere else
 ```
 

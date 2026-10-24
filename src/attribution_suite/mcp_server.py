@@ -158,7 +158,13 @@ def sweep_stale_cases(now: float | None = None) -> int:
     return removed
 
 
-app = Server("attribution")
+#: Built in `build_server()`, not at import time: the two generations of the
+#: MCP SDK register handlers differently, and the 1.x decorators do not exist
+#: on a 2.x Server. Binding at import meant `attribution-mcp` died with
+#: `AttributeError: 'Server' object has no attribute 'list_tools'` before it
+#: printed anything -- against whatever SDK `pipx inject` or `uvx` installs
+#: today, which is 2.x.
+SERVER_NAME = "attribution"
 
 
 def _top_entity(result) -> dict:
@@ -220,7 +226,6 @@ def _wrap(payload: dict[str, Any]) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, indent=2, default=str))]
 
 
-@app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
@@ -320,7 +325,6 @@ async def list_tools() -> list[Tool]:
 NETWORK_TOOLS = frozenset({"attribute_domain", "explain_ads_txt"})
 
 
-@app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name in NETWORK_TOOLS and not str(
             (arguments or {}).get("authorization", "")).strip():
@@ -498,6 +502,38 @@ def _registry_coverage(args: dict) -> list[TextContent]:
     })
 
 
+def build_server():
+    """Return a Server with the tools registered, on either SDK generation.
+
+    mcp 1.x registers handlers with decorators on an existing Server; mcp 2.x
+    takes them as constructor callbacks and wraps the results in typed
+    envelopes. Supporting both is a dozen lines and avoids telling people to
+    pin an SDK version to match ours.
+    """
+    if not MCP_AVAILABLE:                       # pragma: no cover - guarded by main()
+        raise RuntimeError("the mcp SDK is not installed")
+
+    import inspect
+
+    if "on_list_tools" in inspect.signature(Server.__init__).parameters:
+        from mcp import types as _types
+
+        async def _on_list_tools(_ctx, _params=None):
+            return _types.ListToolsResult(tools=await list_tools())
+
+        async def _on_call_tool(_ctx, params):
+            content = await call_tool(params.name, dict(params.arguments or {}))
+            return _types.CallToolResult(content=list(content))
+
+        return Server(SERVER_NAME, version=_VERSION,
+                      on_list_tools=_on_list_tools, on_call_tool=_on_call_tool)
+
+    app = Server(SERVER_NAME)                   # mcp 1.x
+    app.list_tools()(list_tools)
+    app.call_tool()(call_tool)
+    return app
+
+
 def main() -> None:
     if not MCP_AVAILABLE:
         from .install import extra_hint
@@ -508,6 +544,8 @@ def main() -> None:
     import asyncio
 
     sweep_stale_cases()
+
+    app = build_server()
 
     async def _serve():
         async with stdio_server() as (r, w):

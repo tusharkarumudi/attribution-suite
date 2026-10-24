@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "attribution": {
+      "command": "uvx",
+      "args": ["--from", "attribution-suite[mcp]", "attribution-mcp"]
+    }
+  }
+}

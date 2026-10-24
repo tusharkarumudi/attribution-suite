@@ -139,9 +139,20 @@ says so instead of falling back in silence. `attribution doctor` reports both.
 ### Driving it from an agent
 
 ```bash
-attribution skill --install      # the skill, into ~/.claude/skills/
+attribution skill --bundle       # -> ad-attribution.zip, to attach or unzip
+attribution skill --install      # or straight into ~/.claude/skills/
 attribution skill --mcp-config   # or the MCP server entry, path resolved
 ```
+
+`--bundle` writes one archive carrying the skill, a `/ad-attribution` slash
+command, an MCP config and install instructions for each route. Attach it to a
+host that accepts skill uploads, or unzip it into a skills directory.
+
+**What travels and what does not:** the archive carries the method and the
+rules for reporting a result. The investigation itself is a program that
+fetches `ads.txt`, `sellers.json` and public registers, so an assistant with
+no shell needs the MCP server to actually run anything. A chat that can run
+nothing gets the method, not the capability.
 
 The skill ships inside the package, so an install is all you need. It carries
 what a tool schema cannot say: that a band is evidence strength and not a

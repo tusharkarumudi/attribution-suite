@@ -435,7 +435,7 @@ def _doctor(a: argparse.Namespace) -> int:
           f"{SKILL_DIR if shipped.exists() else 'MISSING'}")
     installed = [d for d in (DEFAULT_SKILL_HOME,
                              Path.cwd() / ".claude" / "skills"
-                             / "entity-attribution")
+                             / "ad-attribution")
                  if (d / "SKILL.md").exists()]
     if installed:
         for d in installed:
@@ -493,7 +493,55 @@ def _doctor(a: argparse.Namespace) -> int:
 SKILL_DIR = Path(__file__).resolve().parent / "skill"
 
 #: Where Claude Code and the Claude desktop app look for skills.
-DEFAULT_SKILL_HOME = Path.home() / ".claude" / "skills" / "entity-attribution"
+DEFAULT_SKILL_HOME = Path.home() / ".claude" / "skills" / "ad-attribution"
+
+
+def _bundle_skill(out_dir: Path) -> int:
+    """Write ad-attribution.zip, ready to attach to a host that takes uploads.
+
+    The archive's top level must be the skill directory itself, and that
+    directory's name must equal the `name` in the frontmatter -- a zip of the
+    files alone is rejected with nothing useful said about why. Built here
+    rather than by hand so that what ships is what the tests check.
+    """
+    import re
+    import zipfile
+
+    src = SKILL_DIR
+    skill_md = src / "SKILL.md"
+    if not skill_md.exists():
+        print(f"the skill is missing from this install: {src}", file=sys.stderr)
+        return 1
+
+    front = skill_md.read_text().split("---")[1]
+    name = re.search(r"name:\s*(\S+)", front).group(1)
+    if not re.fullmatch(r"[a-z0-9-]{1,64}", name):
+        print(f"skill name {name!r} is not a valid directory name",
+              file=sys.stderr)
+        return 1
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / f"{name}.zip"
+    files = sorted(f for f in src.rglob("*") if f.is_file())
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            # Deterministic: a fixed timestamp means two builds of the same
+            # content produce byte-identical archives, so a checksum means
+            # something to whoever receives one.
+            info = zipfile.ZipInfo(f"{name}/{f.relative_to(src).as_posix()}",
+                                   date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            z.writestr(info, f.read_bytes())
+
+    print(f"{target}")
+    print(f"  {len(files)} file(s), {target.stat().st_size:,} bytes")
+    print(f"  top level: {name}/   (what an upload expects)")
+    print()
+    print("attach it to a host that takes skill uploads, or unzip it into a")
+    print("skills directory. INSTALL.md inside covers every route, including")
+    print("the MCP server for hosts that have no shell.")
+    return 0
 
 
 def _skill(a: argparse.Namespace) -> int:
@@ -518,6 +566,9 @@ def _skill(a: argparse.Namespace) -> int:
                   f"    {extra_hint('mcp', 'mcp')}", file=sys.stderr)
             return 1
         return 0
+
+    if a.bundle:
+        return _bundle_skill(Path(a.to).expanduser() if a.to else Path.cwd())
 
     src = SKILL_DIR
     if not (src / "SKILL.md").exists():
@@ -946,9 +997,13 @@ def build_parser(prog: str = "attribution") -> argparse.ArgumentParser:
                     help="copy the skill into your skills directory")
     sk.add_argument("--to", metavar="DIR", default="",
                     help="install into DIR instead of ~/.claude/skills/"
-                         "entity-attribution")
+                         "ad-attribution")
     sk.add_argument("--force", action="store_true",
                     help="overwrite an existing installed copy")
+    sk.add_argument("--bundle", action="store_true",
+                    help="build ad-attribution.zip: the skill, the slash "
+                         "command and the MCP config, in the layout a host "
+                         "expects from an uploaded archive")
     sk.add_argument("--mcp-config", action="store_true",
                     help="print the MCP server entry for an agentic host, "
                          "with the absolute path resolved")
