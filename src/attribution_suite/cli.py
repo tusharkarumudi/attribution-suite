@@ -104,9 +104,22 @@ def _incomplete_reason(stats: dict, scope) -> str:
         if on_subject is not None:
             where = (f" — {on_subject} on the subject itself, {elsewhere} on "
                      "third-party hosts")
-        why.append(f"{blocked} retrieval(s) were blocked by fetch policy or "
-                   f"URL safety (robots.txt, a size cap, or a refused host)"
-                   f"{where}")
+        # Name the cause that actually dominated. "blocked by fetch policy or
+        # URL safety" was printed over a run whose blocks were almost all this
+        # machine failing to reach anything -- the same misattribution the
+        # per-URL reasons used to make, in the one line most likely to be
+        # quoted out of the report.
+        unreachable = stats.get("hosts_unreachable")
+        if unreachable:
+            why.append(
+                f"{blocked} retrieval(s) produced no evidence{where}; "
+                f"{unreachable} host(s) could not be reached FROM THIS "
+                "MACHINE at all, which is an environment condition and not a "
+                "rule published by those sites")
+        else:
+            why.append(f"{blocked} retrieval(s) were blocked by fetch policy "
+                       f"or URL safety (robots.txt, a size cap, or a refused "
+                       f"host){where}")
     if stats.get("budget_exhausted"):
         why.append(f"the request budget ({scope.max_requests}) was reached")
     if stats.get("runtime_exhausted"):
@@ -190,6 +203,37 @@ def _band_label(a) -> str:
         return ("UNCORROBORATED  (one evidence group; not contradicted, "
                 "not yet corroborated)")
     return f"{band}  ({a.estimative})"
+
+
+def _print_report(res) -> None:
+    """Put the whole readable result on stdout.
+
+    A run driven by an assistant has no way to hand over `./out`: the files are
+    on whatever machine the tool ran on, and in a hosted chat the person asking
+    cannot open them. Printing the report is what makes such a run usable --
+    the evidence package is still written, because a result nobody can verify
+    later is worth less, but nothing the reader needs is only in a file.
+    """
+    report = next((p for p in res.outputs
+                   if str(p).endswith("attribution_report.md")), None)
+    if report is None:
+        print("  (no report was written; nothing to print)")
+        return
+    try:
+        body = Path(report).read_text()
+    except OSError as e:
+        print(f"  (report at {report} could not be read: {e})")
+        return
+
+    print("=" * 72)
+    print(body.rstrip())
+    print("=" * 72)
+    print()
+    print("The report above is the whole finding; nothing needed to read it is")
+    print("only in a file. For independent verification later, the evidence")
+    print("package is on the machine that ran this:")
+    for p in res.outputs:
+        print(f"  {p}")
 
 
 def _print_findings(res, show_person: bool = False) -> None:
@@ -465,6 +509,18 @@ def _doctor(a: argparse.Namespace) -> int:
           + ("  (first run downloads Google's 104 MB file)" if not files else ""))
 
     print("\nNETWORK")
+    ambient = next((v for v in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY",
+                                "all_proxy", "HTTP_PROXY", "http_proxy")
+                    if os.environ.get(v, "").strip()), "")
+    if ambient:
+        print(f"  ok {ambient} is set: this machine reaches the network "
+              "through a proxy.\n"
+              "     A run adopts it automatically when the case file declares "
+              "no egress, and\n"
+              "     records the vantage point as `environment`, not `direct`, "
+              "so the evidence\n"
+              "     never claims an exit the traffic did not use. Pass "
+              "--direct to refuse it.")
     try:
         import asyncio
 
@@ -768,6 +824,9 @@ def _run(a: argparse.Namespace) -> int:
             show_scores=not a.no_scores,
             evidence=not a.no_evidence, concurrency=a.concurrency,
             adversarial=not getattr(a, "no_adversarial", False),
+            egress_env=getattr(a, "egress_env", False),
+            cloaking=getattr(a, "cloaking_check", False),
+            direct=getattr(a, "direct", False),
         )
     except PolicyError as e:
         print(f"policy error: {e}", file=sys.stderr)
@@ -794,8 +853,11 @@ def _run(a: argparse.Namespace) -> int:
     _payee(res, _seed_of(res), a.show_person)
     _print_findings(res, a.show_person)
     print()
-    for p in res.outputs:
-        print(f"  {p}")
+    if getattr(a, "stdout", False):
+        _print_report(res)
+    else:
+        for p in res.outputs:
+            print(f"  {p}")
     # Non-zero when integrity failed: a caller scripting this must be able to
     # detect that the findings are not presentable.
     # Machine-readable exit semantics. This returned 0 for any run whose
@@ -924,6 +986,10 @@ def build_parser(prog: str = "attribution") -> argparse.ArgumentParser:
                    help="replace identifiers with hashes in the report and "
                         "exports (for sharing; the report becomes unreadable "
                         "to you)")
+    g_out.add_argument("--stdout", action="store_true",
+                   help="print the whole report to stdout instead of listing "
+                        "output paths. For a run driven by an assistant, or "
+                        "any run whose ./out directory the reader cannot open")
     g_out.add_argument("--diagnostics", action="store_true",
                    help="list every blocked and checked URL")
     g_out.add_argument("--show-person", action="store_true",
@@ -959,6 +1025,25 @@ def build_parser(prog: str = "attribution") -> argparse.ArgumentParser:
                    help=argparse.SUPPRESS)
     g_out.add_argument("--no-scores", action="store_true",
                    help="omit confidence figures from the report")
+    g_scope.add_argument("--egress-env", action="store_true",
+                   help="force this machine's HTTP proxy (HTTPS_PROXY) as the "
+                        "vantage point, overriding any egress declared in the "
+                        "case file. An ambient proxy is now adopted "
+                        "automatically when nothing is declared, so this is "
+                        "only needed to override a declaration")
+    g_scope.add_argument("--direct", action="store_true",
+                   help="refuse this machine's HTTP proxy and connect "
+                        "directly, even if that means nothing resolves. For "
+                        "testing what is reachable from this machine's own "
+                        "vantage point; hosts that fail will be reported as "
+                        "unreachable from here, which is not a statement "
+                        "about those sites")
+    g_scope.add_argument("--cloaking-check", action="store_true",
+                   help="retrieve ads.txt a second time with a browser "
+                        "User-Agent and compare the declarations. Catches a "
+                        "site that serves this tool one file and everyone "
+                        "else another. It misrepresents the client, so it is "
+                        "opt-in and recorded in the audit trail")
     g_scope.add_argument("--no-adversarial", action="store_true",
                    help="skip the planted-identifier checks. They cost up to "
                         "three retrievals per identifier; without them an "

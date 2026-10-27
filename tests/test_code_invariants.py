@@ -45,7 +45,13 @@ def test_runner_passes_what_it_builds():
     src = inspect.getsource(runner.run_case)
     assert "evidence_log=ev" in src
     assert "policy=policy" in src
-    assert "EgressPool.from_case" in src
+
+    # The egress is built by a helper now, because an ambient proxy has to be
+    # reported rather than silently ignored. The invariant is unchanged -- the
+    # Fetcher is handed a real pool -- so follow the call instead of pinning
+    # the literal to one function.
+    assert "egress=_egress_pool(" in src
+    assert "EgressPool.from_case" in inspect.getsource(runner._egress_pool)
 
 
 def test_assess_passes_declared_dependence():

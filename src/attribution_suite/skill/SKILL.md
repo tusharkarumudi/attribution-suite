@@ -28,12 +28,16 @@ email — but to be paid, a real legal entity must be named to an ad system, and
 Either the CLI or the MCP server; the CLI is the whole toolkit.
 
 ```bash
-attribution-suite --domain example.com --authorization "ticket: ACME-1234"
+attribution-suite --domain example.com --authorization "ticket: ACME-1234" --stdout
 ```
 
-That writes the case file, follows the chain, prints the answer and leaves a
-report and evidence package in `./out`. Useful flags, in the order they
-usually matter:
+**Always pass `--stdout` when you are reporting back to someone in a
+conversation.** It prints the whole report where you can read it and relay it.
+Without it the result is a set of files under `./out` on whatever machine ran
+the tool, which the person you are answering usually cannot open — quoting
+paths at them is not an answer.
+
+Useful flags, in the order they usually matter:
 
 | | |
 |---|---|
@@ -43,18 +47,47 @@ usually matter:
 | `--max-requests N` | request budget, default 800 |
 | `--diagnostics` | every blocked and checked URL, when a result looks thin |
 | `--minimise` | hash identifiers, for a report handed to someone else |
-| `--out DIR` | where everything is written, default `./out` |
+| `--stdout` | print the whole report instead of listing file paths. Use it whenever a person, not a script, is reading |
+| `--out DIR` | where the evidence package is written, default `./out` |
+| `--egress-env` | route through this machine's proxy; needed in a sandbox |
+| `--cloaking-check` | fetch ads.txt again as a browser and compare. Catches a site serving this tool a different file from everyone else |
 
-Read the answer from the terminal, or from `out/attribution_report.md`. The
-other files are for verification: `out/verification_trail.json` says what was
-fetched and what was blocked, and `out/evidence/` carries the hashes and
-timestamps that let someone else check the result.
+With `--stdout` the answer is in front of you. The files are still written for
+verification later: `out/verification_trail.json` says what was fetched and
+what was blocked, and `out/evidence/` carries the hashes and timestamps that
+let someone else check the result. Mention that they exist and where; do not
+make reading them a condition of understanding the answer.
 
 **Exit codes.** `0` succeeded. `3` means INCOMPLETE — a budget or a block
 stopped part of the search, and the message says which. It is not a failure,
 but an absence in an incomplete result may mean "could not be checked" rather
 than "checked and not found", and must be reported that way. `2` is a refusal
 (see below), and the message explains it.
+
+**A sandbox needs no flag.** If this environment reaches the network through a
+proxy, the run adopts it and records the vantage point as `environment` rather
+than `direct`, so the evidence never claims an exit the traffic did not use.
+If the environment publishes a CA bundle, it is trusted for that route, because
+such proxies re-sign TLS. Both are stated in the warnings. Nothing to pass.
+
+**If every retrieval still comes back blocked, read the warnings before
+reporting a result.** These look like the tool failing and are not:
+
+- *"N host(s) could not be reached from this machine at all: ..."* — an egress
+  allowlist. Those are the hosts the chain needs; report the list rather than
+  reporting an absence, because nothing was checked.
+- *"TLS was terminated by this environment's proxy"* — the run worked, and the
+  captures prove what the proxy served rather than what the origin served. Say
+  so if the result is going to be relied on by someone else.
+- *"EGRESS FAILED OPEN"* — a declared proxy is not carrying the traffic. Report
+  it; do not report the findings as though the vantage point held.
+- *"N retrieval(s) completed but were cut at the byte cap"* — partial reads,
+  not blocks. The streaming lookup covers `sellers.json`; anything else was
+  read in part.
+
+None of these is a statement about the site. Saying "the site blocked us" when
+the environment did is the single easiest way to mislead someone with this
+tool.
 
 If anything looks broken before blaming the tool, run `attribution doctor`: it
 reports the install, the versions, keys, cache state and one live request. A
@@ -90,6 +123,47 @@ calibrated.
 
 **Any conclusion about a natural person is a lead**, not a finding, until a
 statutory registry corroborates it. Say that when you report one.
+
+**If the run reports `SELECTIVE SERVING`, lead with it.** It means the site's
+`ads.txt` declared different accounts depending on who asked, so every finding
+below it describes the copy this tool was shown rather than the site's public
+declaration. Do not report the payee as settled; report that the declaration
+is not consistent and name the accounts that differed. `ads_txt_consistency`
+in the summary carries the verdict: `consistent`, `cosmetic_differences`
+(comments or ordering — not selective serving), `DIFFERENT_ACCOUNTS`, or
+`unverified` when only one copy could be retrieved.
+
+## What the report gives you, and how to use each part
+
+With `--stdout` the report arrives with four parts written for four different
+readers. Use them; do not re-derive them.
+
+- **Executive summary** — subject, what the evidence supports, how strong, and
+  every condition that changes the reading. It is written to be quoted. If it
+  carries a condition (INCOMPLETE, selective serving, unreachable hosts,
+  demoted claims, a gravatar binding), that condition belongs in your first
+  sentence, not a footnote.
+- **Network map** — a `mermaid` `flowchart LR` of the pivots, built from the
+  assessed links rather than raw claims, so it cannot show a connection the
+  text does not support. Pass the fence through **unchanged** if the surface
+  renders mermaid; otherwise describe the shape in a sentence ("three sites to
+  one payee account") and do not redraw it by hand. A thick arrow is
+  `STRONG_EVIDENCE`; the edge label is a band, never a probability.
+- **Indicators** — the observables, one row each, with the collector and the
+  first-retrieval timestamp. Rows marked `DEMOTED` were placed or are
+  otherwise unreliable and are kept deliberately: an identifier planted to
+  manufacture a link is a fact about whoever planted it. Never copy a demoted
+  row into a blocklist without saying it was demoted and why.
+- **Pairwise assessments and Provenance** — the working. Cite them when asked
+  how a conclusion was reached.
+
+**Gravatar bindings.** The run matches emails it already found against avatar
+hashes it already found, by computing `md5(lowercase(trim(email)))` — no
+requests, no guessed addresses. A match means the page **displays that
+address's avatar**. It does **not** mean the page's operator controls the
+address: anyone can embed anyone's hash, so a planted hash would otherwise
+bind a bystander. Report such a link with that caveat attached, every time.
+The `gravatar_links` count in the summary says how many were found.
 
 ## What this will refuse, and why
 

@@ -342,3 +342,14 @@ def test_install_md_does_not_promise_capability_a_chat_cannot_have():
     assert "MCP" in text
     assert "it cannot do the work" in text or "cannot do the work" in text
     assert "What this bundle is not" in text
+
+
+def test_the_skill_tells_the_assistant_to_print_the_report():
+    """A result that exists only as files under ./out is not an answer to
+    someone in a conversation: those files are on whatever machine ran the
+    tool, and the person asking cannot open them."""
+    text = SKILL.read_text()
+    assert "--stdout" in text
+    assert "cannot open" in text
+    cmd = (SKILL.parent / "commands" / "ad-attribution.md").read_text()
+    assert "--stdout" in cmd, "the slash command must pass it"

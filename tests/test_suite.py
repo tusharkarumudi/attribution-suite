@@ -201,8 +201,32 @@ def test_the_declared_minimums_match_the_apis_this_package_calls():
 
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     deps = tomllib.loads(pyproject.read_text())["project"]["dependencies"]
-    joined = " ".join(deps)
-    assert "attribution-graph>=2.0.6" in joined, \
-        "before_resolve needs attribution-graph 2.0.6; the pin still admits older"
-    assert "paytrace>=2.0.24" in joined, \
-        "assess_identifier's new arguments need paytrace 2.0.24"
+
+    # Compared as versions, not as literal strings. This asserted
+    # `"attribution-graph>=2.0.7" in joined` and so failed on the next bump --
+    # every release, for a pin that had only moved FORWARD. A test that has to
+    # be edited whenever the thing it guards is legitimately updated gets
+    # edited without being read, which is how it stops guarding anything.
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
+    floors = {}
+    for raw in deps:
+        req = Requirement(raw)
+        for spec in req.specifier:
+            if spec.operator == ">=":
+                floors[req.name] = Version(spec.version)
+
+    #: The release that introduced the API named beside it. A floor BELOW this
+    #: resolves to a sibling without that API, and the failure is a TypeError
+    #: naming an internal keyword argument rather than a resolver error.
+    REQUIRED = {
+        "attribution-graph": (Version("2.0.7"), "Engine.run(before_resolve=)"),
+        "paytrace": (Version("2.0.25"),
+                     "assess_identifier(sharing_domains=, holder_counts=)"),
+    }
+    for name, (needed, why) in REQUIRED.items():
+        assert name in floors, f"{name} has no >= floor; {why} is unguarded"
+        assert floors[name] >= needed, (
+            f"{name}>={floors[name]} is below {needed}, which is where {why} "
+            "landed: that resolves to a sibling without it")

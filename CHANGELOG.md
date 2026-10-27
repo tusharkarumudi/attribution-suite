@@ -2,8 +2,95 @@
 
 ## [Unreleased]
 
-## [2.0.22] - 2026-10-23
+## [2.0.23] - 2026-10-27
 
+### A gate for the defect that keeps recurring
+
+`assess_identifier` -- the whole planted-identifier defence -- had one caller
+and it was the demo script, so four releases of real investigations scored
+planted identifiers at face value. It was found by accident. This release found
+three more of the same shape, and a test suite cannot find them: a suite only
+exercises code someone remembered to call, so the dead code is dead in the
+tests too.
+
+`scripts/find_unreachable.py` is a reachability census over all four
+repositories, run by `VERIFY.sh`, and it is tested like any other deliverable
+-- starting with the test that it actually fails, because a gate that cannot
+fail is worse than no gate. Registry decorators (`@register`, `@rule`) count as
+reachable; `@property` deliberately does not, since a property nobody reads is
+as dead as a function nobody calls, and exempting it hid most of what turned up.
+An orphan that is deliberate goes in `ALLOWED` with its reason, so the decision
+is recorded rather than left.
+
+### Network
+
+- An ambient proxy is adopted automatically and recorded as the `environment`
+  vantage point, so a sandbox run needs no flag; `--direct` refuses it for
+  the case that wants this machine's own reachability. The doctor no longer
+  tells people to pass `--egress-env`, which is now only an override.
+- An egress preflight runs before the work: one request, non-fatal, and a proxy
+  that is not carrying the traffic is reported as FAILED OPEN at the start
+  rather than discovered in the manifest afterwards.
+- TLS interception is disclosed in the warnings and the report summary, because
+  a capture taken through it proves what the proxy served.
+- Partial reads are reported separately from blocks, and unconditionally -- the
+  first version reported them only when something *else* was also blocked, so a
+  run with one truncated read and no blocks said nothing.
+- `Trail.filtered` had no caller while two sites hand-rolled the same step. The
+  demotion step now uses the helper; the Robin step keeps a direct `add`,
+  because those claims are marked rather than set aside and "Set aside" would
+  have been the wrong word.
+
+### Demo
+
+A seventh beat, `python ncs_demo.py report`: two emails and two avatar hashes on
+one page, one of them a journalist's, placed by the operator. Both bind exactly,
+with zero requests, and neither is drawn on the map -- because one page is one
+source. Asserted in CI like the other six.
+
+- **Gravatar linking runs in every investigation**, before the adversarial
+  checks rather than after -- order matters, because a binding those checks
+  should demote has to exist in the graph to be demoted. `gravatar_links` is
+  in the summary, and a warning states the caveat so it cannot be read as
+  control of the address.
+- The report gained an **executive summary, a mermaid network map of the
+  pivots and an indicator table**, and the skill and the `/ad-attribution`
+  command now say how each is to be used: lead from the summary, pass the
+  mermaid fence through unchanged or describe it in a sentence, and never pass
+  a `DEMOTED` indicator on as a clean one.
+
+
+
+- **`--cloaking-check` closes the selective-serving gap.** A material
+  difference raises `SELECTIVE SERVING` and states that the findings describe
+  the copy this tool was shown, not the site's public declaration; the verdict
+  is in the summary as `ads_txt_consistency`. The skill and the
+  `/ad-attribution` command are told to lead with it when it fires.
+- It is **the only control here that misrepresents the client** -- the second
+  retrieval sends a browser `User-Agent` -- so it is opt-in, and the audit
+  trail records the exact string sent. Two variants that misrepresent nothing
+  need no flag: a second declared egress (same request, different exit, which
+  catches selective serving by IP) runs automatically when a case file declares
+  one, and the archived copy comes through the existing wayback collectors.
+- **`--stdout` prints the whole report.** A run driven by an assistant could
+  only answer with paths under `./out` — files on whatever machine ran the
+  tool, which the person being answered usually cannot open. The skill and the
+  `/ad-attribution` command now pass it by default, and the evidence package is
+  still written for verification later.
+- The INCOMPLETE exit line names the cause that actually dominated. It said
+  "blocked by fetch policy or URL safety" over runs whose blocks were almost
+  entirely this machine failing to reach anything — the same misattribution the
+  per-URL reasons made, in the one line most likely to be quoted.
+- **Runs inside a sandbox now work, and when they cannot, they say why.**
+  An ambient `HTTPS_PROXY` that was deliberately not used is reported with the
+  flag that uses it (`--egress-env`). Hosts that could not be reached from
+  this machine at all are counted and **named**: that list is what an egress
+  allowlist needs, and it was previously buried in a cascade of blocks that
+  read as though the sites had refused us.
+- `doctor` reports an ambient proxy and the flag to use with it.
+- The skill and the `/ad-attribution` command tell an assistant to read those
+  two warnings before reporting anything -- saying "the site blocked us" when
+  the sandbox did is the easiest way to mislead someone with this tool.
 - **The MCP server could not start.** `mcp` 2.x replaced the 1.x decorator
   registration (`@app.list_tools()`) with constructor callbacks, and the
   handlers were bound at import, so `attribution-mcp` died with
@@ -25,6 +112,13 @@
 - `INSTALL.md` states plainly what a bundle attached to a chat with no shell
   can and cannot do: it carries the method and the reporting rules, not the
   capability. The capability needs the MCP server or a host with a shell.
+
+## [2.0.22] - 2026-10-23
+
+- Released from the MCP and bundle work only: `build_server()` for both
+  SDK generations, `attribution skill --bundle`, the `ad-attribution`
+  rename. The sandbox and cloaking work that followed is 2.0.23, and its
+  dependency floors are higher.
 
 ## [2.0.21] - 2026-10-21
 

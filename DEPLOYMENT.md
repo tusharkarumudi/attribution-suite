@@ -294,6 +294,40 @@ content.
 - Every response embeds the calibration caveat, because a model summarising a
   result will otherwise present `STRONG_EVIDENCE` as certainty.
 
+## 8a. Selective serving, and the one control that misrepresents us
+
+`ads.txt` is served from the publisher's own origin by software the publisher
+controls, and nothing stops that software answering one thing to a crawler and
+another to a browser. `--cloaking-check` retrieves it twice and compares the
+declared account sets:
+
+```bash
+attribution-suite --domain example.com --authorization "..." --cloaking-check
+```
+
+Comparison is on the set of `(ad system, seller ID, relationship)` plus
+`OWNERDOMAIN`, never on bytes — two honest copies of the same file differ
+constantly in comments, ordering and line endings, and a byte comparison would
+report cloaking everywhere. The verdict appears as `ads_txt_consistency`, and a
+material difference raises a `SELECTIVE SERVING` warning saying that the
+findings describe the copy this tool was shown.
+
+**This is the only control in the toolkit that misrepresents the client.** The
+second retrieval sends a browser `User-Agent`, which is why it is opt-in rather
+than default, and why the audit trail records the exact string that was sent.
+A tool claiming an honest record while quietly lying about who it is would be
+worth less than one that cannot run the check at all. Decide whether that
+trade is acceptable for your engagement before you enable it.
+
+Two variants that misrepresent nothing run without the flag:
+
+- a **second declared egress** — identical request, different exit, which
+  catches selective serving by IP or ASN. Automatic when the case file
+  declares more than one egress.
+- the **archived copy**, through the existing wayback collectors. Weaker:
+  `ads.txt` legitimately changes, so a difference there is a question rather
+  than a finding.
+
 ## 9. Untrusted input
 
 `ads.txt`, imprint pages and DNS records are written by the entity under

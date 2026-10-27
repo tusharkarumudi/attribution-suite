@@ -1033,3 +1033,206 @@ def test_skipping_the_checks_is_stated_in_the_result(tmp_path):
     res = run_case(case, tmp_path / "out", evidence=False, adversarial=False)
     assert res.stats.get("adversarial") == "skipped (--no-adversarial)"
     assert any("planted to manufacture a link" in w for w in res.warnings)
+
+
+def test_hosts_unreachable_from_here_are_named(tmp_path, monkeypatch):
+    """A sandbox with an egress allowlist blocks every host it does not
+    permit, and the run reported a cascade that read as though the sites had
+    refused us. The operator needs the list of hosts to allowlist, which is
+    exactly what this warning is."""
+    from attribution_suite import runner
+
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: NET-1\nauthorization: test\n"
+        f"seeds: [domain:unreachable.example]\nmax_requests: 6\n"
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    res = runner.run_case(case, tmp_path / "out", evidence=False)
+
+    named = [w for w in res.warnings if "could not be reached from this" in w]
+    if res.stats.get("hosts_unreachable"):
+        assert named, "unreachable hosts were counted but not named"
+        assert "allowlist" in named[0], "no remedy offered"
+        assert "not a rule published by those sites" in named[0], \
+            "the warning must not read as though the sites blocked us"
+
+
+def test_an_ambient_proxy_is_adopted_and_recorded(tmp_path, monkeypatch):
+    """A sandbox's proxy is now used without a flag, and said so.
+
+    Refusing it was stricter than the invariant it protected. The invariant is
+    that the manifest must not claim a vantage point the traffic did not use --
+    and recording the proxy as the `environment` provider satisfies that
+    exactly. Refusing instead produced the most common failure anyone hit:
+    every retrieval blocked, the report reading as though the sites had
+    refused, and a flag nobody knew to pass as the remedy.
+    """
+    from attribution_suite import runner
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8899")
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: NET-2\nauthorization: test\n"
+        f"seeds: [domain:unreachable.example]\nmax_requests: 4\n"
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    res = runner.run_case(case, tmp_path / "out", evidence=False)
+    said = [w for w in res.warnings if "routed through that proxy" in w]
+    assert said, "the proxy was adopted without saying so"
+    assert "`environment`" in said[0], "the recorded vantage point is not named"
+    assert "--direct" in said[0], "the way to refuse it is not named"
+
+
+def test_direct_refuses_the_ambient_proxy(tmp_path, monkeypatch):
+    """One case still wants the old behaviour: asking what is reachable from
+    this machine, where adopting a proxy answers a different question."""
+    from attribution_suite import runner
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8899")
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: NET-3\nauthorization: test\n"
+        f"seeds: [domain:unreachable.example]\nmax_requests: 4\n"
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    res = runner.run_case(case, tmp_path / "out", evidence=False, direct=True)
+    said = [w for w in res.warnings if "--direct" in w and "not used" in w]
+    assert said, "a refused proxy must be stated, or a blocked run is a mystery"
+    assert "not a statement about those sites" in said[0]
+
+
+def test_egress_env_declares_the_proxy(tmp_path, monkeypatch):
+    """One flag, and the manifest still records a declared vantage point."""
+    from attribution_suite import runner
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8899")
+    warnings: list[str] = []
+    pool = runner._egress_pool(object(), True, warnings)
+    assert pool.get("").provider == "environment"
+    assert not pool.get("").is_direct
+
+
+def test_stdout_prints_the_whole_report(tmp_path, monkeypatch, capsys):
+    """--stdout exists because a chat-hosted run cannot hand over ./out."""
+    from attribution_suite import cli
+
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: OUT-1\nauthorization: test\n"
+        f"seeds: [domain:unreachable.example]\nmax_requests: 4\n"
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    rc = cli.main(["run", "--case", str(case), "--out", str(tmp_path / "o"),
+                   "--stdout"])
+    out = capsys.readouterr().out
+    assert rc in (0, 3, 4), rc
+    assert "# Attribution assessment" in out, "the report body was not printed"
+    assert "the whole finding" in out
+    assert "package is on the machine that ran this" in out
+    assert "Bands describe evidence strength" in out, \
+        "the calibration caveat must travel with the report"
+
+
+def test_without_stdout_the_paths_are_listed(tmp_path, capsys):
+    from attribution_suite import cli
+
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: OUT-2\nauthorization: test\n"
+        f"seeds: [domain:unreachable.example]\nmax_requests: 4\n"
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+    cli.main(["run", "--case", str(case), "--out", str(tmp_path / "o")])
+    out = capsys.readouterr().out
+    assert "attribution_report.md" in out
+    assert "# Attribution assessment" not in out, \
+        "the body should only print with --stdout"
+
+
+def test_a_run_reports_selective_serving(tmp_path, monkeypatch):
+    """The gap, closed end to end.
+
+    Every check in the toolkit reasons about the ads.txt it was shown. Nothing
+    compared that copy against anyone else's, so a site serving one file to
+    this tool and another to a browser defeated all of them at once -- and the
+    report read as though the declaration were the site's rather than ours.
+    """
+    import paytrace.cloaking as ck
+
+    real = ck.check_cloaking
+
+    async def cloaked(fetcher, domain, **kw):
+        report = ck.CloakingReport(domain=domain, verdict=ck.MATERIAL)
+        report.differences = [
+            "declared to a browser User-Agent but NOT to this tool: "
+            "hidden-ssp.example/4242 (DIRECT)"]
+        report.reasons = ["the set of declared accounts depends on who is asking"]
+        report.misrepresented = bool(kw.get("browser_ua"))
+        return report
+
+    monkeypatch.setattr(ck, "check_cloaking", cloaked)
+    try:
+        case = tmp_path / "c.yaml"
+        case.write_text(
+            f"case_ref: CLOAK-1\nauthorization: test\n"
+            f"seeds: [domain:site.example]\nmax_requests: 6\n"
+            f"audit_path: {tmp_path}/audit.jsonl\n")
+
+        from attribution_suite.runner import run_case
+        res = run_case(case, tmp_path / "out", evidence=False, cloaking=True)
+    finally:
+        monkeypatch.setattr(ck, "check_cloaking", real)
+
+    assert res.stats.get("ads_txt_consistency") == ck.MATERIAL, res.stats
+    said = [w for w in res.warnings if "SELECTIVE SERVING" in w]
+    assert said, res.warnings
+    assert "hidden-ssp.example/4242" in said[0]
+    assert "the copy this tool was shown" in said[0], \
+        "the warning must say what the findings actually describe"
+
+
+def test_the_check_is_not_run_unless_asked_for(tmp_path, monkeypatch):
+    """It misrepresents the client, so it is opt-in."""
+    import paytrace.cloaking as ck
+
+    called = {"n": 0}
+    real = ck.check_cloaking
+
+    async def counting(fetcher, domain, **kw):
+        called["n"] += 1
+        return await real(fetcher, domain, **kw)
+
+    monkeypatch.setattr(ck, "check_cloaking", counting)
+    try:
+        case = tmp_path / "c.yaml"
+        case.write_text(
+            f"case_ref: CLOAK-2\nauthorization: test\n"
+            f"seeds: [domain:site.example]\nmax_requests: 4\n"
+            f"audit_path: {tmp_path}/audit.jsonl\n")
+        from attribution_suite.runner import run_case
+        res = run_case(case, tmp_path / "out", evidence=False)
+    finally:
+        monkeypatch.setattr(ck, "check_cloaking", real)
+
+    assert called["n"] == 0, "a single-egress run must not make the extra request"
+    assert "ads_txt_consistency" not in res.stats
+
+
+def test_the_misrepresentation_is_recorded(tmp_path, monkeypatch):
+    """A tool that claims an honest record while quietly lying about who it is
+    would be worth less than one that cannot do the check."""
+    case = tmp_path / "c.yaml"
+    case.write_text(
+        f"case_ref: CLOAK-3\nauthorization: test\n"
+        f"seeds: [domain:unreachable.example]\nmax_requests: 4\n"
+        f"audit_path: {tmp_path}/audit.jsonl\n")
+
+    from attribution_suite.runner import run_case
+    res = run_case(case, tmp_path / "out", evidence=False, cloaking=True)
+
+    trail = (tmp_path / "out" / "verification_trail.md")
+    text = trail.read_text() if trail.exists() else ""
+    steps = getattr(res.trail, "steps", []) if hasattr(res, "trail") else []
+    rendered = text + " ".join(str(getattr(s, "description", "")) for s in steps)
+    assert "browser User-Agent" in rendered, \
+        "the second retrieval must appear in the audit trail"

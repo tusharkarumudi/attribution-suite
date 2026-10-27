@@ -15,6 +15,7 @@ FIXTURE MODE (default) -- offline, deterministic, the backup:
     python ncs_demo.py archive        # beat 4: the archive does not forget
     python ncs_demo.py planted        # beat 5: catching a planted identifier
     python ncs_demo.py injection      # beat 6: an operator instructing the agent
+    python ncs_demo.py report         # beat 7: the binding the report refuses to draw
 
 LIVE MODE -- the same beats against a real domain, over the real network:
 
@@ -81,6 +82,14 @@ PLANTED_GA = "G-RIVAL00001"   # a competitor's ID, planted to frame them
 #: control -- so the demo needs both ends of that comparison.
 RIVAL = "rival-network.example"
 SCRUBBED = "ca-pub-4417000000000007"   # on the site 2019-2023, removed since
+
+#: Beat 7. The operator's own address, in the site's imprint.
+OPERATOR_EMAIL = "editor@examplemedia.example"
+#: A bystander's address, never on the site. Its Gravatar hash IS on the site,
+#: in the page markup, placed there by the operator. The arithmetic binding is
+#: exact and the inference it invites -- that this person runs the site -- is
+#: what the engine must refuse to draw.
+BYSTANDER_EMAIL = "j.doe@unrelated-newsroom.example"
 
 
 def _ads_txt(domain: str) -> str:
@@ -451,9 +460,115 @@ def injection(a) -> int:
     return 1
 
 
+def report_beat(a) -> int:
+    """Beat 7: the report, and the binding it refuses to draw.
+
+    Two emails, two avatar hashes, one page. One address is the operator's,
+    in the site's own imprint. The other belongs to someone with no
+    connection to the site at all -- but its hash is in the page markup,
+    because anyone can embed anyone's hash and an operator who wants to
+    implicate a journalist needs only their email address to do it.
+
+    `md5(lowercase(trim(email)))` binds both, exactly, with no requests. The
+    arithmetic cannot tell the two cases apart, and that is the point: what
+    separates them is corroboration from a source that is not the page. So
+    the binding carries the page's correlation group and is not definitional,
+    which means neither pair reaches a supported band on the page alone --
+    and the planted one never appears on the network map.
+    """
+    from attribution_graph import (
+        AttributionGraph,
+        CaseScope,
+        Claim,
+        EntityType,
+        Identifier,
+        IdKind,
+        Predicate,
+        Reliability,
+        resolve,
+    )
+    from attribution_graph.export import executive_summary, ioc_table, network_map
+    from paytrace.fingerprint import gravatar_hash
+    from paytrace.gravatar_link import link_gravatars
+
+    root = WORK
+    root.mkdir(parents=True, exist_ok=True)
+    case = root / "beat7.yaml"
+    case.write_text(
+        f"case_ref: DEMO-7\nauthorization: demo, fictional corpus\n"
+        f"seeds: [domain:{SEED}]\nminimize: false\n"
+        f"audit_path: {root / 'beat7.jsonl'}\n")
+    scope = CaseScope.load(str(case))
+
+    g = AttributionGraph(case_ref="DEMO-7")
+
+    def add(s, sk, o, ok, coll, group, pred):
+        g.add_claim(Claim(subject=Identifier(sk, s), predicate=pred,
+                          object=Identifier(ok, o), collector=coll,
+                          source_url=f"https://{coll}.example/{s}",
+                          reliability=Reliability.AUTHORITATIVE,
+                          correlation_group=group))
+
+    seller = f"{ADSYS}/{SELLER}"
+    # The payout chain, corroborated by two independent sources.
+    add(SEED, IdKind.DOMAIN, seller, IdKind.SELLER_ID,
+        "ads_txt", f"ads_txt|{SEED}", Predicate.SHARES_ANALYTICS_ID)
+    add(SEED, IdKind.DOMAIN, seller, IdKind.SELLER_ID,
+        "wayback_ads", f"wayback|{SEED}", Predicate.SHARES_ANALYTICS_ID)
+    add(seller, IdKind.SELLER_ID, ENTITY, IdKind.ORG_NAME,
+        "sellers_json", f"sellers_json|{ADSYS}", Predicate.SAME_AS)
+    add(seller, IdKind.SELLER_ID, ENTITY, IdKind.ORG_NAME,
+        "gleif", "gleif|lei", Predicate.SAME_AS)
+
+    # Both addresses, and both hashes, observed on the one page.
+    add(SEED, IdKind.DOMAIN, OPERATOR_EMAIL, IdKind.EMAIL,
+        "imprint", f"imprint|{SEED}", Predicate.PROFILE_BINDING)
+    for email in (OPERATOR_EMAIL, BYSTANDER_EMAIL):
+        add(SEED, IdKind.DOMAIN, gravatar_hash(email), IdKind.GRAVATAR_HASH,
+            "wordpress_json", f"wordpress|{SEED}", Predicate.PROFILE_BINDING)
+    # The bystander's address itself comes from somewhere else entirely --
+    # a mailing list archive -- which is why there is anything to bind.
+    add("mailing-list.example", IdKind.DOMAIN, BYSTANDER_EMAIL, IdKind.EMAIL,
+        "page_text", "list|archive", Predicate.PROFILE_BINDING)
+
+    link = link_gravatars(g)
+    print(f"  {link.summary()}")
+    print(f"  requests made: {link.requests}")
+    for address, digest in link.matched:
+        print(f"    {address} -> {digest}")
+    for claim in link.claims:
+        g.add_claim(claim)
+
+    result = resolve(g, {EntityType.COMPANY, EntityType.PERSONA})
+    status = {"result_complete": True, "gravatar_links": len(link.matched)}
+
+    print()
+    for line in executive_summary(g, result, scope, status):
+        print(line)
+    print()
+    for line in network_map(g, result):
+        print(line)
+    print()
+    for line in ioc_table(g):
+        print(line)
+
+    drawn = "\n".join(network_map(g, result))
+    planted_hash = gravatar_hash(BYSTANDER_EMAIL)
+    if planted_hash in drawn or BYSTANDER_EMAIL in drawn:
+        print("\nUNEXPECTED: the planted binding was drawn as a supported link.")
+        return 1
+    if len(link.matched) != 2:
+        print("\nUNEXPECTED: the arithmetic should bind both addresses.")
+        return 1
+    print(f"\n  Both addresses bound by arithmetic, with {link.requests} requests.")
+    print("  Neither is drawn: one page is one source, so the bystander's")
+    print("  address stays off the map that a reader will believe.")
+    return 0
+
+
 COMMANDS = {"setup": setup, "declaration": declaration, "payee": payee,
             "archive": archive, "planted": planted,
-            "injection": injection, "scan": scan}
+            "injection": injection, "scan": scan, "report": report_beat}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(

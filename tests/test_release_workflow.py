@@ -178,7 +178,7 @@ def test_clean_run_gets_no_banner():
 
 # ---- blocked reconciliation without evidence ---------------------------- #
 
-def test_blocked_collection_is_reconciled_without_evidence_capture(tmp_path):
+def test_blocked_collection_is_reconciled_without_evidence_capture(tmp_path, monkeypatch):
     """`_report_blocked()` ran only inside the evidence branch, so
     `--no-evidence` turned "collection was blocked" into "checked and found
     nothing": a fully-blocked run reported result_valid=true, result_complete=
@@ -192,6 +192,15 @@ def test_blocked_collection_is_reconciled_without_evidence_capture(tmp_path):
         f"case_ref: BLOCKED\nauthorization: t\ncontact_email: t@e.test\n"
         f"seeds: [domain:x.example]\naudit_path: {tmp_path / 'a.jsonl'}\n"
         "pivot_radius: 1\nmax_requests: 5\n")
+
+    # Pinned, because this asserts what a fully-blocked run reports and the
+    # machine running the tests may itself sit behind a proxy. Once an ambient
+    # proxy is adopted the run is proxied, and the private-address block below
+    # still fires -- a host that resolves into RFC1918 is refused either way --
+    # but the test should not depend on which of those two paths it took.
+    for var in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+                "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
 
     real = paytrace.Fetcher
 
@@ -624,3 +633,58 @@ def test_production_publish_does_not_skip_existing(pkg):
     publish = next(s for s in doc["jobs"]["release"]["steps"]
                    if "pypi-publish" in str(s.get("uses", "")))
     assert (publish.get("with") or {}).get("skip-existing") is not True
+
+
+def test_each_package_declares_one_version_in_three_places_that_agree():
+    """`_version.py`, `pyproject.toml` and `CITATION.cff` are three sources of
+    truth and nothing held them together.
+
+    Divergence is quiet and nasty: the wheel's metadata says one version,
+    `attribution version` -- which reads the module -- says another, and the
+    citation a paper quotes says a third. A release verified against PyPI by
+    one of those numbers while publishing another is the kind of mistake you
+    hear about from a user.
+
+    The first version of this test checked two of the three and passed while
+    `CITATION.cff` sat a release behind in every package. Which is the whole
+    lesson: a consistency check that covers some of the sources tells you
+    nothing about the others, and reads as though it did.
+    """
+    import re
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parents[2]
+    packages = {
+        "attribution-graph": "attribution_graph",
+        "paytrace": "paytrace",
+        "handle-correlation": "handle_correlation",
+        "attribution-suite": "attribution_suite",
+    }
+    checked = 0
+    for repo, module in packages.items():
+        toml = base / repo / "pyproject.toml"
+        version_py = base / repo / "src" / module / "_version.py"
+        if not toml.exists() or not version_py.exists():
+            continue
+        declared = re.search(r'^version\s*=\s*"([^"]+)"', toml.read_text(),
+                             re.M)
+        in_module = re.search(r'^__version__\s*=\s*"([^"]+)"',
+                              version_py.read_text(), re.M)
+        assert declared, f"{repo}: pyproject.toml declares no version"
+        assert in_module, f"{repo}: _version.py declares no __version__"
+        assert declared.group(1) == in_module.group(1), (
+            f"{repo}: pyproject.toml says {declared.group(1)} but "
+            f"_version.py says {in_module.group(1)}")
+
+        citation = base / repo / "CITATION.cff"
+        assert citation.exists(), f"{repo}: no CITATION.cff"
+        cited = re.search(r"^version:\s*(\S+)", citation.read_text(), re.M)
+        assert cited, f"{repo}: CITATION.cff declares no version"
+        assert cited.group(1) == declared.group(1), (
+            f"{repo}: CITATION.cff says {cited.group(1)} but "
+            f"pyproject.toml says {declared.group(1)}")
+        checked += 1
+
+    assert checked == len(packages), (
+        f"only {checked} of {len(packages)} packages were checked -- this test "
+        "passes vacuously outside the four-repository layout, so it must say so")

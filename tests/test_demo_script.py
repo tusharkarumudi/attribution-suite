@@ -120,3 +120,32 @@ def test_fixture_output_is_deterministic(world):
     a = _run(["planted"], world)
     b = _run(["planted"], world)
     assert a.stdout == b.stdout
+
+
+def test_beat_7_binds_both_addresses_and_draws_neither(world):
+    """The beat exists because the arithmetic cannot tell the two cases apart.
+
+    An operator who embeds a journalist's avatar hash produces a binding as
+    exact as the operator's own. What separates them is corroboration from a
+    source that is not the page -- so the beat fails if the planted address
+    reaches the map, and it fails just as hard if the arithmetic stops
+    binding it, because a check that quietly stopped matching would look
+    identical to a check that is working.
+    """
+    r = _run(["report"], world)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "requests made: 0" in r.stdout, \
+        "the binding is computed; a request here means it started probing"
+    assert r.stdout.count("gravatar-md5") == 2
+    assert "j.doe@unrelated-newsroom.example" in r.stdout, \
+        "the planted address belongs in the indicator table"
+
+    fence = r.stdout.split("```mermaid")[1].split("```")[0]
+    assert "flowchart LR" in fence
+    assert "j.doe" not in fence and "e640848975a41092a2d56593a41ae743" not in fence
+    assert "adnet.example/156423" in fence, "the payout chain is corroborated"
+    assert "not a probability" in r.stdout
+
+    assert "UNEXPECTED" not in r.stdout
+    assert "displays the address's avatar" in r.stdout, \
+        "the caveat must reach the executive summary, not only the code"

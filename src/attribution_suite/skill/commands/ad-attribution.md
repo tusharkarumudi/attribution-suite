@@ -19,17 +19,28 @@ inferable from the output.
 3. Run it:
 
    ```bash
-   attribution-suite --domain <domain> --authorization "<what the user said>"
+   attribution-suite --domain <domain> --authorization "<what the user said>" --stdout
    ```
 
    Add `--show-person` only if the user asked for it explicitly.
-4. If the command is not found, run `attribution doctor` and report what it
+4. If every retrieval is blocked, check the warnings before concluding
+   anything. A proxy in this environment is adopted automatically, so there is
+   no flag to add. `host(s) could not be reached from this machine` means an
+   egress allowlist: report that list — it is what needs permitting — and do
+   not describe the result as an absence, because nothing was checked. `TLS was
+   terminated by this environment's proxy` means the run worked but the
+   captures prove what the proxy served; say so. `EGRESS FAILED OPEN` means the
+   declared vantage point did not hold — lead with that.
+5. If the command is not found, run `attribution doctor` and report what it
    says rather than guessing. If the tool is not installed at all, say so and
    point at `pipx install attribution-suite`.
 
 ## Reporting
 
-- Lead with the `PAYEE` block: who the ad system says it pays for this site.
+- If the summary says `SELECTIVE SERVING`, lead with **that**: the site
+  declared different accounts to different retrievals, so the payee below is
+  the copy this tool was shown, not the site's public declaration.
+- Otherwise lead with the `PAYEE` block: who the ad system says it pays.
 - `DIRECT` names the seller. `RESELLER` names an intermediary and is **not**
   the party being paid.
 - Give the band and the number of independent evidence groups. Bands are
@@ -38,5 +49,17 @@ inferable from the output.
   search, and that an absence may mean "could not be checked".
 - Any conclusion about a natural person is a **lead** until a statutory
   register corroborates it. Say that when you report one.
-- Point at `out/attribution_report.md` and `out/verification_trail.json` rather
-  than pasting the whole report.
+- `--stdout` puts the whole report in front of you: summarise it in the
+  conversation. Say that the evidence package was also written, and where, but
+  never answer by pointing at a path the reader cannot open.
+- Lead from the report's own **Executive summary** rather than rewriting it,
+  and carry any condition it names into your first sentence.
+- Pass the **Network map** `mermaid` fence through unchanged if this surface
+  renders mermaid; otherwise describe the shape in one sentence. Do not redraw
+  it. Arrow labels are bands, not probabilities.
+- **Indicators** rows marked `DEMOTED` stay in the table on purpose — a
+  planted identifier is a fact about whoever planted it. Never pass one on as
+  a clean indicator.
+- A **gravatar** link means the page displays that address's avatar, computed
+  from values already collected. It does **not** mean the operator controls
+  the address. Report it with that caveat attached.
