@@ -25,11 +25,70 @@ email — but to be paid, a real legal entity must be named to an ad system, and
 
 ## How to run it
 
-Either the CLI or the MCP server; the CLI is the whole toolkit.
+**Check first, in one command, and do not guess:**
+
+```bash
+attribution-suite --version || python attribution_portable.py --version
+```
+
+Whichever answers is the mode you are in. Both run the same analysis code.
+
+### Offline mode — no install, no network, works in any chat sandbox
+
+**Use this whenever `attribution-suite` is not installed, and do not try to
+install it.** `pip install` is refused as external code in most chat sandboxes,
+and the MCP server runs `uvx`, which downloads the same package and hits the
+same wall. `attribution_portable.py` sits beside this file: one file, standard
+library only, nothing to install.
+
+It cannot reach the network — but **you can**. So you fetch, and it analyses.
+
+```bash
+python attribution_portable.py example.com -a "ticket: ACME-1234"
+```
+
+With no documents yet it prints the exact URLs to fetch and the filename to
+save each one under. Then:
+
+1. Fetch each URL with your own browsing or web-fetch tool.
+2. Save each response body **verbatim** into `./fetched/`, under the filename
+   it gave. Do not summarise, reformat or re-key anything — the digest
+   recorded for each document is taken over the bytes you save, so a tidied
+   copy is no longer the document the site served.
+3. Run the same command again. It either asks for more or prints the report.
+
+Usually two rounds: `ads.txt` first, then the `sellers.json` files it names.
+
+Rules that matter more here than anywhere else:
+
+- **If a fetch fails, skip the file.** A missing document is reported as "not
+  checked", which is correct and useful. Never save an error page, a
+  placeholder or your own summary in its place — it would be recorded, hashed
+  and reported as what the site served.
+- **If your tool truncates a large response, save what you got.** Do not
+  stitch, guess or fill the gap. A document that does not parse is detected as
+  incomplete and any absence in it is reported as "not checked" rather than
+  "not found". That distinction is the whole point of the tool, and a
+  truncated `sellers.json` silently read as complete is the worst thing it can
+  be made to do.
+- The report opens with an **OFFLINE REPLAY** banner saying the retrievals
+  were not the toolkit's own. Keep it when you relay the result. It is the
+  honest difference between this and a verified run.
+- Paths like `/.env` and `/.git/config` are **left out of the plan on
+  purpose**. Fetching them from a chat is unauthenticated probing of someone
+  else's server carrying the user's own address. `--include-sensitive` exists;
+  use it only when the stated authorisation plainly covers it.
+
+### Installed mode — the full toolkit
 
 ```bash
 attribution-suite --domain example.com --authorization "ticket: ACME-1234" --stdout
 ```
+
+This retrieves and hashes its own evidence, records its own vantage point,
+applies its own robots.txt policy and produces a verifiable evidence package.
+Prefer it whenever it is available, and say so when a result needs to be
+verifiable by someone else.
 
 **Always pass `--stdout` when you are reporting back to someone in a
 conversation.** It prints the whole report where you can read it and relay it.

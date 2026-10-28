@@ -2,7 +2,89 @@
 
 ## [Unreleased]
 
-## [2.0.23] - 2026-10-27
+## [2.0.24] - 2026-10-27
+
+Released as 2.0.24 rather than 2.0.23. The 2.0.23 tag exists but its CI run
+failed before publishing, so nothing reached PyPI under that number and
+re-using it would mean force-deleting a public tag. The failure was a test of
+mine that demanded all four repositories be checked out; CI clones siblings on
+a best-effort basis by design, so it reported a checkout layout as a defect.
+
+- **The version-consistency check no longer hard-fails on a single-repo
+  checkout.** The non-vacuous guard now sits on this repository's own package,
+  which is always present, and siblings are checked when they are there.
+- **`build_portable.py` refuses to write a partial bundle.** From a single-repo
+  checkout it silently assembled eight modules instead of sixty-eight, and
+  that bundle looked like it worked: the import hook only claims modules it
+  embedded, so `import attribution_graph` fell through to the installed
+  package. Three tests passed on it. They now assert where each module was
+  loaded *from*, and skip when the bundle cannot be built at all.
+
+
+### Offline mode: the toolkit runs where it could not be installed
+
+The skill was instructions pointing at a package from PyPI, and the chat
+sandboxes it was written for will not install one: `pip install` is refused as
+code from an external source, and the MCP config runs `uvx`, which downloads
+the same package and hits the same wall. So a real session reported "command
+not found" and fell back to ad-hoc web lookups -- no evidence bands, no
+correlation groups, no evidence package, no audit record. Every property the
+toolkit exists to provide was exactly what got dropped, and nothing in CI
+noticed, because nothing here had ever run the way a user runs it.
+
+The work splits along the line that actually divides those environments: the
+assistant **can** reach the web, its sandbox cannot. So the assistant fetches
+and the toolkit analyses.
+
+- **`attribution_portable.py`** -- the whole chain in one standard-library
+  file, shipped inside the skill. No install, no network, Python 3.11+.
+- **Nothing is re-implemented.** `ReplayFetcher` satisfies the live fetcher's
+  interface and serves saved documents, so the real collectors, engine,
+  scoring, resolution, adversarial checks, gravatar linking and report run
+  unchanged. A test asserts the bundle and the installed packages produce the
+  same report from the same documents; `VERIFY.sh` fails if the bundle is
+  stale. A second copy of the scoring rules would drift, and the dead copy is
+  the one that gets corrected -- this project has shipped that defect four
+  times already.
+- **The fetch plan comes from the collectors**, not a list: run the pipeline,
+  record what was asked for and not found, print that. It cannot go stale
+  against the collectors because it *is* them.
+- **A truncated document is detected, not declared.** The browsing tool in
+  that real session silently cut the large `sellers.json` files short, and a
+  truncated file read as "the seller is not in here" turns *not checked* into
+  *checked and absent* -- the one inversion this toolkit exists to prevent. A
+  structured document that does not parse is incomplete, and any absence in it
+  is reported as not checked.
+- **An audit trail is written.** "Your ticket numbers and reasons are only in
+  this chat" was a real cost of running without the tool; it costs one
+  append-only file.
+- The report opens with an **OFFLINE REPLAY** banner: the digests commit to
+  what was saved, not to what the origin served. It is a reading of supplied
+  documents, and says so.
+- Paths like `/.env` and `/.git/config` are **held back by default**. The
+  toolkit probes them under an authorised, rate-limited case; an assistant
+  fetching them from a chat is unauthenticated probing of someone else's
+  server carrying the user's own address, and several read as an attack in the
+  target's logs. `--include-sensitive` is there when the authorisation covers
+  it.
+- `attribution_portable.py --version` exists, because the skill tells an
+  assistant to probe for it to decide which mode it is in. A test now asserts
+  that every flag the docs show being passed to that command exists; its first
+  version filtered to a hardcoded allowlist, so planting `--nonexistent-flag`
+  in SKILL.md passed it, which is a test of the allowlist rather than of the
+  docs.
+- The run stops when the payment chain is complete, not when every
+  corroborating source is exhausted -- there is always another register, so
+  the first version never terminated. The rest is offered as optional.
+
+### Also
+
+- The constructor-wiring invariant was wrong in both directions and is now
+  scoped correctly. Per-file counting flagged a stand-in class that exists to
+  be read by other modules; counting package-wide made it vacuous, which was
+  proved by planting the exact defect and watching it pass. It now requires a
+  read on `self` in the same class or a read on some other object somewhere,
+  and both canaries fail it.
 
 ### A gate for the defect that keeps recurring
 

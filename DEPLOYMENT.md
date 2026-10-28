@@ -26,6 +26,15 @@ For deployment planning, the two constraints that shape host design:
 
 ## 1. Install
 
+**Or don't.** If you are running inside a chat sandbox, a hosted notebook or
+anywhere that refuses to install packages, use the offline bundle instead:
+`attribution_portable.py`, shipped inside the skill, is the whole analysis
+chain in one standard-library file. It makes no requests — you (or the
+assistant) fetch the documents and it does the rest. See §8b.
+
+For a machine you control, install properly: only the installed toolkit
+retrieves and hashes its own evidence.
+
 ```bash
 # the only three lines most people need
 sudo apt install pipx && pipx ensurepath   # macOS: brew install pipx
@@ -327,6 +336,57 @@ Two variants that misrepresent nothing run without the flag:
 - the **archived copy**, through the existing wayback collectors. Weaker:
   `ads.txt` legitimately changes, so a difference there is a question rather
   than a finding.
+
+## 8b. Running where nothing can be installed
+
+`pip install` is refused as external code in most chat sandboxes, and an MCP
+config that runs `uvx` downloads the same package and hits the same wall. That
+made the skill useless in the environment it was written for: "command not
+found", then ad-hoc web lookups presented as a result, with none of the bands,
+groups, audit record or evidence package that make a result worth anything.
+
+`attribution_portable.py` sits beside `SKILL.md` in the bundle. One file,
+standard library only, Python 3.11+, no network of its own.
+
+```bash
+python attribution_portable.py example.com -a "ticket: ACME-1234"
+# prints the URLs to fetch and the filename to save each under
+# fetch them, save the bodies verbatim into ./fetched/, run the same line again
+```
+
+Two rounds is normal: `ads.txt` first, then the `sellers.json` files it names.
+It stops once the payment chain is complete and offers the remaining
+corroborating sources rather than requiring them.
+
+It is not a reimplementation. The bundle embeds the real modules and a replay
+fetcher that serves saved documents through the live fetcher's interface, so
+the collectors, engine, scoring, resolution, adversarial checks and report run
+unchanged. A test asserts it produces the same report as the installed
+packages from the same documents; `VERIFY.sh` fails if it is stale. Rebuild it
+with `python scripts/build_portable.py` after changing any package — never
+edit the generated file.
+
+**What you get:** evidence bands with their correlation groups, the
+adversarial checks, gravatar binding, executive summary, network map,
+indicator table, an append-only audit trail carrying your authorisation, and
+a SHA-256 for every document read.
+
+**What you do not:** evidence this toolkit retrieved. The digests commit to
+what was *saved*, not to what the origin served; there is no vantage point and
+no robots.txt decision of its own. The report says so in a banner, and that
+banner should survive into whatever you hand on. For a result someone else
+must verify independently, run the installed toolkit.
+
+**A truncated document is detected, not trusted.** A browsing tool that
+silently cuts a large `sellers.json` short would otherwise turn *not checked*
+into *checked and absent*. A structured document that does not parse is
+treated as incomplete and every absence in it is reported as not checked.
+
+**Sensitive paths are held back.** `/.env`, `/.git/config` and the rest are
+left out of the fetch plan: the toolkit probes them under an authorised,
+rate-limited case, whereas an assistant fetching them from a chat is
+unauthenticated probing of someone else's server carrying the user's own
+address. `--include-sensitive` is there when the authorisation covers it.
 
 ## 9. Untrusted input
 

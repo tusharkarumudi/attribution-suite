@@ -335,13 +335,30 @@ def test_the_bundle_installs_from_the_zip(tmp_path):
 
 
 def test_install_md_does_not_promise_capability_a_chat_cannot_have():
-    """The honest part. A skill is instructions; the investigation is a
-    program. A bundle attached to a chat with no shell cannot fetch an
-    ads.txt, and saying otherwise would sell a prompt as a program."""
+    """The honest part, restated once the capability changed.
+
+    This used to assert the flat claim that a chat "cannot do the work",
+    which was true while the only route was an installed package. The
+    offline bundle changed what is true, not what has to be honest: a chat
+    that can run Python now does the full analysis, and a chat with no code
+    execution at all still cannot run anything. The claim must track the
+    distinction rather than either of the two comfortable blanket answers.
+    """
     text = (SKILL.parent / "INSTALL.md").read_text()
     assert "MCP" in text
-    assert "it cannot do the work" in text or "cannot do the work" in text
     assert "What this bundle is not" in text
+
+    # The one environment that genuinely cannot: no code execution.
+    assert "no code execution" in text
+    assert "nothing can run" in text
+
+    # And the capability that is now claimed must be stated with its limit,
+    # not as an unqualified "full toolkit".
+    assert "attribution_portable.py" in text
+    assert "makes **no network requests**" in text
+    assert "digests commit" in text, \
+        "the evidential difference from a live run must be stated where the "\
+        "capability is claimed, not only in the report"
 
 
 def test_the_skill_tells_the_assistant_to_print_the_report():

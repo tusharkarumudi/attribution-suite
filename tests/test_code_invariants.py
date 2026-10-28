@@ -152,36 +152,82 @@ def test_bands_are_evidence_strength_not_probability():
     assert "STRONG_EVIDENCE" in names
 
 
+#: Dependencies whose assignment-without-use has been an actual defect here.
+WIRED_ATTRS = ("policy", "evidence_log", "egress", "index", "resolver")
+
+
 def test_ast_finds_no_unused_constructor_wiring():
-    """A dependency assigned in __init__ and never read is the shape of every
-    wiring defect found so far."""
+    """A dependency assigned in __init__ and read nowhere is the shape of
+    every wiring defect found so far.
+
+    Scoped to the class, plus reads on something other than `self` anywhere in
+    the four packages. Both halves are needed and each was wrong alone:
+
+    - Per-FILE counting flagged `ReplayFetcher.egress`, which exists to
+      satisfy the fetcher interface and is read by `paytrace` and the runner.
+      A stand-in class implements an interface precisely so that other modules
+      can read it.
+    - Counting package-wide instead made the test vacuous: `self.evidence_log`
+      is read inside `Fetcher`, so a *different* class assigning it and never
+      reading it passed. Verified by planting exactly that and watching the
+      test go green.
+
+    So: read on `self` within the same class, or read on some other object
+    somewhere. Neither, and it is wired to nothing.
+    """
     import importlib
     import pathlib
 
-    for package in PACKAGES:
-        root = pathlib.Path(importlib.import_module(package).__file__).parent
-        for f in root.rglob("*.py"):
-            src = f.read_text()
-            try:
-                tree = ast.parse(src)
-            except SyntaxError:
+    roots = [pathlib.Path(importlib.import_module(p).__file__).parent
+             for p in PACKAGES]
+    files = [f for root in roots for f in root.rglob("*.py")
+             if "__pycache__" not in str(f)
+             and "attribution_portable.py" not in f.name]
+
+    trees = {}
+    external: dict[str, int] = {}
+    for f in files:
+        try:
+            trees[f] = ast.parse(f.read_text())
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(trees[f]):
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.ctx, ast.Load)
+                    and not (isinstance(node.value, ast.Name)
+                             and node.value.id == "self")):
+                external[node.attr] = external.get(node.attr, 0) + 1
+
+    checked = 0
+    for f, tree in trees.items():
+        for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+            init = next((n for n in cls.body if isinstance(n, ast.FunctionDef)
+                         and n.name == "__init__"), None)
+            if init is None:
                 continue
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.FunctionDef) or node.name != "__init__":
-                    continue
-                for stmt in ast.walk(node):
-                    if not isinstance(stmt, ast.Assign):
-                        continue
-                    for t in stmt.targets:
-                        if (isinstance(t, ast.Attribute)
-                                and isinstance(t.value, ast.Name)
-                                and t.value.id == "self"
-                                and t.attr in ("policy", "evidence_log", "egress",
-                                               "index", "resolver")):
-                            uses = len(re.findall(rf"self\.{t.attr}\b", src))
-                            assert uses > 1, (
-                                f"{f.name}: self.{t.attr} is assigned and never "
-                                "used — the wiring defect pattern")
+            assigned = {
+                tgt.attr
+                for stmt in ast.walk(init) if isinstance(stmt, ast.Assign)
+                for tgt in stmt.targets
+                if isinstance(tgt, ast.Attribute)
+                and isinstance(tgt.value, ast.Name) and tgt.value.id == "self"
+                and tgt.attr in WIRED_ATTRS
+            }
+            if not assigned:
+                continue
+            self_reads = {
+                n.attr for n in ast.walk(cls)
+                if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load)
+                and isinstance(n.value, ast.Name) and n.value.id == "self"
+            }
+            for attr in sorted(assigned):
+                checked += 1
+                assert attr in self_reads or external.get(attr, 0) > 0, (
+                    f"{f.name}: {cls.name}.{attr} is assigned in __init__, "
+                    f"never read in {cls.name}, and read on nothing else "
+                    "anywhere — the wiring defect pattern")
+
+    assert checked, "nothing was scanned — this test would pass vacuously"
 
 
 def test_no_fetcher_is_closed_in_its_own_event_loop():

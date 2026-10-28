@@ -649,6 +649,13 @@ def test_each_package_declares_one_version_in_three_places_that_agree():
     `CITATION.cff` sat a release behind in every package. Which is the whole
     lesson: a consistency check that covers some of the sources tells you
     nothing about the others, and reads as though it did.
+
+    Scope: THIS package always, siblings when they are checked out. The first
+    version demanded all four and failed CI, which clones siblings on a
+    best-effort basis and says so -- "a first CI run should not be red for that
+    reason alone". A workspace assertion that hard-fails on a single-repo
+    checkout reports a checkout layout as a defect. The non-vacuous guard
+    belongs on this repository's own package, which is always present.
     """
     import re
     from pathlib import Path
@@ -660,7 +667,7 @@ def test_each_package_declares_one_version_in_three_places_that_agree():
         "handle-correlation": "handle_correlation",
         "attribution-suite": "attribution_suite",
     }
-    checked = 0
+    checked: list[str] = []
     for repo, module in packages.items():
         toml = base / repo / "pyproject.toml"
         version_py = base / repo / "src" / module / "_version.py"
@@ -683,8 +690,8 @@ def test_each_package_declares_one_version_in_three_places_that_agree():
         assert cited.group(1) == declared.group(1), (
             f"{repo}: CITATION.cff says {cited.group(1)} but "
             f"pyproject.toml says {declared.group(1)}")
-        checked += 1
+        checked.append(repo)
 
-    assert checked == len(packages), (
-        f"only {checked} of {len(packages)} packages were checked -- this test "
-        "passes vacuously outside the four-repository layout, so it must say so")
+    assert "attribution-suite" in checked, (
+        "this repository's own package was not checked, so the test would "
+        "pass vacuously -- which is the failure mode it exists to rule out")

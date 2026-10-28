@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "attribution-suite"
-version = "2.0.23"
+version = "2.0.24"
 description = "One install and one CLI over the attribution-graph toolchain"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,8 +26,8 @@ dependencies = [
   # in paytrace 2.0.24. With the old `>=2.0.1` pins, upgrading only this
   # package resolved to siblings without those APIs and every run died with
   # `TypeError: Engine.run() got an unexpected keyword argument`.
-  "attribution-graph>=2.0.7,<2.1",
-  "paytrace>=2.0.25,<2.1",
+  "attribution-graph>=2.0.8,<2.1",
+  "paytrace>=2.0.26,<2.1",
   "handle-correlation>=2.0.1,<2.1",
 ]
 
@@ -59,6 +59,11 @@ packages = ["src/attribution_suite"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Generated, not written. `attribution_portable.py` is assembled by
+# scripts/build_portable.py from the real modules; linting it reports on
+# base64 payload lines, and "fixing" it would be edited away on the next
+# rebuild. The sources it is built from are linted.
+extend-exclude = ["src/attribution_suite/skill/attribution_portable.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]

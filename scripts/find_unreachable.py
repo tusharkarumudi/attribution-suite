@@ -41,7 +41,11 @@ TEXT_SUFFIXES = {".md", ".toml", ".yaml", ".yml", ".sh", ".cfg", ".json",
                  ".txt", ".in"}
 
 SKIP = (".venv", "__pycache__", "/build/", "/dist/", ".egg-info", "/.git/",
-        "/out/", "/node_modules/")
+        "/out/", "/node_modules/",
+        # Generated: the offline bundle embeds every module's source as a
+        # base64 payload. Scanning it would count each definition twice and
+        # report the embedded copies as reachable, hiding real orphans.
+        "attribution_portable.py")
 
 #: Unreachable on purpose, with the reason. Anything here is a deliberate
 #: decision, not an oversight -- which is the distinction the gate exists to

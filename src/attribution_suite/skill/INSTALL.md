@@ -1,17 +1,53 @@
 # Installing this bundle
 
-One bundle, three ways in. Which one you use depends on whether your assistant
-can **run a command** — because the investigation is a program that fetches
-`ads.txt`, `sellers.json` and public registers. A chat window that cannot run
-anything can read these rules, but it cannot do the work.
+**The short version: upload the zip and you are done.** `attribution_portable.py`
+travels inside it, needs nothing installed and no network of its own, and runs
+anywhere there is Python. Everything below is about getting *more* than that.
 
-| Where | What to do | Can it actually investigate? |
+This used to open by saying the toolkit was a separate package from PyPI and
+that a chat window could only explain the method. Both were true and both were
+the problem: chat sandboxes refuse `pip install` as external code, so the skill
+reported "command not found" and the assistant fell back to ad-hoc web lookups
+— losing the evidence bands, correlation groups, audit record and evidence
+package, which is everything the toolkit is for.
+
+| Where | What to do | What it can do |
 |---|---|---|
-| Claude (web or desktop) | upload `ad-attribution.zip` under **Customize → Skills** | only via the MCP server below |
-| Claude Code | `attribution skill --install`, or unzip into `~/.claude/skills/` | **yes** — it has a shell |
-| Gemini CLI / Antigravity, Cursor, OpenCode | copy the `ad-attribution/` folder into that tool's skills directory | **yes**, if the CLI is installed |
-| Any MCP host | the config below | **yes** — the server does the work |
-| A plain chat with no tools | attach `SKILL.md` as a file | no: it can only explain the method |
+| Claude, ChatGPT or Gemini on the web | upload `ad-attribution.zip` (Claude: **Customize → Skills**); elsewhere attach the folder's files | **the full analysis.** The assistant fetches with its own browsing tool and `attribution_portable.py` does the rest |
+| Claude Code, Gemini CLI, Cursor, OpenCode | copy `ad-attribution/` into that tool's skills directory | **everything**, including the installed CLI if it is present |
+| Any MCP host | the config below | everything, with the server doing the retrieval |
+| A chat with no code execution at all | attach `SKILL.md` | explain the method only — nothing can run |
+
+## 0. Offline mode — what makes the first row work
+
+`attribution_portable.py` is the whole analysis chain in one file: the real
+modules, assembled by `scripts/build_portable.py`, standard library only,
+Python 3.11+. It is not a cut-down reimplementation — a test asserts it
+produces the same report as the installed packages from the same documents,
+because a second copy of the scoring rules would drift and the dead copy is
+the one that gets corrected.
+
+It makes **no network requests**. It does not need to: the assistant can
+already reach the web, and its sandbox cannot. So the work splits along that
+line.
+
+```bash
+python attribution_portable.py example.com -a "ticket: ACME-1234"
+```
+
+With no documents yet it prints the URLs to fetch and the filename for each.
+Fetch them, save the bodies verbatim into `./fetched/`, run it again. Two
+rounds is normal: `ads.txt` first, then the `sellers.json` files it names.
+
+What it gives you that ad-hoc lookups do not: evidence bands with their
+correlation groups, the adversarial checks, gravatar binding, the executive
+summary, the network map, the indicator table, an append-only audit trail
+carrying your stated authorisation, and a SHA-256 for every document read.
+
+What it cannot give you: evidence the *toolkit* retrieved. The digests commit
+to what was saved, not to what the origin served, and the report says so in a
+banner. For a result someone else must verify independently, use the installed
+toolkit.
 
 ## 1. The skill
 

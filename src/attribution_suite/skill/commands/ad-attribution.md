@@ -16,13 +16,33 @@ inferable from the output.
 2. Ask the user **why this investigation is authorised**, in one line, unless
    `$ARGUMENTS` already says. Pass it verbatim. Do not invent one. A run
    without it records itself as unattested in the audit trail.
-3. Run it:
+3. Work out which mode you are in, with one command. Do not guess, and do
+   not try to install anything — `pip install` is refused in most chat
+   sandboxes and the MCP server's `uvx` hits the same wall.
+
+   ```bash
+   attribution-suite --version || python attribution_portable.py --version
+   ```
+
+   **Installed:**
 
    ```bash
    attribution-suite --domain <domain> --authorization "<what the user said>" --stdout
    ```
 
    Add `--show-person` only if the user asked for it explicitly.
+
+   **Not installed — offline mode, which always works:**
+
+   ```bash
+   python attribution_portable.py <domain> -a "<what the user said>"
+   ```
+
+   It prints the URLs to fetch and the filename for each. Fetch them with your
+   own browsing tool, save the bodies verbatim in `./fetched/`, run it again.
+   Two rounds is normal. Never save a summary, an error page or a placeholder
+   in place of a document; if a fetch is truncated, save what you got and let
+   the tool detect it.
 4. If every retrieval is blocked, check the warnings before concluding
    anything. A proxy in this environment is adopted automatically, so there is
    no flag to add. `host(s) could not be reached from this machine` means an
@@ -31,9 +51,12 @@ inferable from the output.
    terminated by this environment's proxy` means the run worked but the
    captures prove what the proxy served; say so. `EGRESS FAILED OPEN` means the
    declared vantage point did not hold — lead with that.
-5. If the command is not found, run `attribution doctor` and report what it
-   says rather than guessing. If the tool is not installed at all, say so and
-   point at `pipx install attribution-suite`.
+5. If neither command works, say so plainly and stop. Do not fall back to
+   ad-hoc web lookups presented as a result: without the tool there are no
+   evidence bands, no correlation groups, no audit record and no evidence
+   package, and an answer that looks the same without them is the failure this
+   skill exists to prevent. Say which part is missing and offer the installed
+   route (`pipx install attribution-suite`) for a verifiable run.
 
 ## Reporting
 
@@ -49,6 +72,9 @@ inferable from the output.
   search, and that an absence may mean "could not be checked".
 - Any conclusion about a natural person is a **lead** until a statutory
   register corroborates it. Say that when you report one.
+- In offline mode, keep the **OFFLINE REPLAY** banner when you relay the
+  result: it states that the retrievals were not the toolkit's own and that
+  the digests commit to what was saved rather than to what the origin served.
 - `--stdout` puts the whole report in front of you: summarise it in the
   conversation. Say that the evidence package was also written, and where, but
   never answer by pointing at a path the reader cannot open.
