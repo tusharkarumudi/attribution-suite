@@ -283,18 +283,49 @@ def test_opening_up_sensitive_paths_offers_them_once_the_chain_is_done(corpus_di
     assert "/.env" in opened or "/.git/config" in opened
 
 
-@pytest.mark.parametrize("url,ok", [
+#: Every special-purpose range, because a hand-maintained list grows gaps.
+#: The first version listed literals plus an RFC1918 regex and missed IPv6
+#: entirely, missed carrier-grade NAT, and missed multicast.
+NOT_FETCHABLE = [
+    "127.0.0.1", "0.0.0.0", "10.0.0.1", "172.16.0.1", "172.31.255.254",
+    "192.168.1.1", "169.254.169.254", "100.64.0.1", "100.127.255.254",
+    "224.0.0.1", "239.255.255.255", "240.0.0.1", "255.255.255.255",
+    "192.0.2.1", "198.51.100.1", "203.0.113.1",
+    "::1", "::", "fd00::1", "fe80::1", "ff02::1", "2001:db8::1",
+]
+FETCHABLE = ["8.8.8.8", "1.1.1.1", "151.101.0.223", "2606:4700:4700::1111"]
+
+
+def _url(addr: str) -> str:
+    return f"https://[{addr}]/x" if ":" in addr else f"https://{addr}/x"
+
+
+@pytest.mark.parametrize("addr", NOT_FETCHABLE)
+def test_no_special_purpose_address_is_ever_in_the_plan(addr):
+    """An assistant must never be asked to fetch one of these.
+
+    A collector may point at a service the operator self-hosts -- Yente
+    defaults to `http://localhost:8000` -- and asking for it is at best
+    confusing, at worst a request against the machine the assistant runs on.
+    """
+    assert _is_fetchable(_url(addr)) is False, addr
+
+
+@pytest.mark.parametrize("addr", FETCHABLE)
+def test_a_real_public_address_is_fetchable(addr):
+    """The other half: a check that refuses everything protects nothing."""
+    assert _is_fetchable(_url(addr)) is True, addr
+
+
+@pytest.mark.parametrize("host,ok", [
     ("http://localhost:8000/search", False),
-    ("https://127.0.0.1/x", False),
-    ("https://10.1.2.3/x", False),
     ("https://yente.internal/x", False),
+    ("https://box.local/x", False),
     ("https://crt.sh/?q=x", True),
+    ("https://storage.googleapis.com/a/b", True),
 ])
-def test_unreachable_hosts_are_never_in_the_plan(url, ok):
-    """A collector may point at a service the operator self-hosts -- Yente
-    defaults to localhost. Asking an assistant to fetch that is at best
-    confusing and at worst a request against its own machine."""
-    assert _is_fetchable(url) is ok
+def test_hostnames_are_judged_too(host, ok):
+    assert _is_fetchable(host) is ok
 
 
 def test_the_run_terminates_once_the_chain_is_complete(corpus_dir):
@@ -397,3 +428,165 @@ def test_the_bundle_runs_on_a_bare_interpreter():
     assert r.returncode == 0, r.stderr
     assert "no network" in r.stdout.lower() or "offline" in r.stdout.lower() \
         or "fetch" in r.stdout.lower()
+
+
+def test_the_bundle_contains_no_construct_ci_will_reject():
+    """CI runs `bandit -r src -ll -q` in four workflows, with no exclusions.
+
+    The bundle lives under `src/`, so anything bandit flags in it fails every
+    one of those jobs — which is how the 2.0.23 release died a second time,
+    on `exec` in the generated loader. Suppressing it would have meant the
+    same `--exclude` repeated in four workflow files plus VERIFY.sh, each free
+    to drift. The loader hands its source to the import machinery instead, so
+    there is nothing to suppress. This asserts it stays that way.
+    """
+    import ast
+
+    bundle = SKILL_DIR / "attribution_portable.py"
+    tree = ast.parse(bundle.read_text())
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    # Exactly what bandit flags: B102 exec_used and B307 eval. `compile` and
+    # `__import__` are not bandit findings, and banning them would be this
+    # test inventing a rule CI does not have -- the mirror image of the
+    # defect it exists to catch.
+    for name in ("exec", "eval"):
+        assert name not in called, (
+            f"the generated bundle calls {name}(), which bandit reports and "
+            "CI fails on. Fix scripts/build_portable.py, not the bundle.")
+
+    assert "nosec" not in bundle.read_text(), (
+        "a suppression in generated output is invisible to review and has to "
+        "be regenerated to change")
+
+
+def test_no_bandit_invocation_quietly_skips_the_bundle():
+    """A guard against the fix that was tempting and wrong.
+
+    If an `--exclude` ever appears, the bundle stops being scanned and the
+    next `exec` in it ships. Four workflows and VERIFY.sh would each need the
+    same flag; this fails if any of them starts carrying one.
+    """
+    root = Path(__file__).resolve().parents[2]
+    files = [p for repo in ("attribution-graph", "paytrace",
+                            "handle-correlation", "attribution-suite")
+             for p in (root / repo / ".github" / "workflows").glob("*.yml")
+             if (root / repo).is_dir()]
+    verify = root / "VERIFY.sh"
+    if verify.exists():
+        files.append(verify)
+    if not files:
+        pytest.skip("no workflows or VERIFY.sh in this checkout")
+
+    for f in files:
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            if "bandit" not in line or line.lstrip().startswith("#"):
+                continue
+            assert "attribution_portable" not in line, (
+                f"{f.name}:{i} excludes the bundle from bandit — scan it "
+                "instead, and keep the generated code clean")
+
+
+# ---- a supplied file that is not the document ------------------------------ #
+
+#: Verbatim shape of what a real fetch tool returned when asked for
+#: weather.com/ads.txt: a refusal plus a structural summary. Saved under the
+#: ads.txt name it parsed to zero records, and the report then said "a site
+#: with no advertising declarations publishes no payee" about a site with
+#: roughly 185 of them.
+FETCH_TOOL_SUMMARY = """I can't reproduce the full file verbatim. Doing so would
+exceed the limit on quoted source material. Here is a structural summary.
+
+**Header variables**
+- `OWNERDOMAIN=weather.com`
+- `MANAGERDOMAIN=bcn.group, DE`
+
+**Overview**
+This is an ads.txt file listing about 185 authorized ad seller entries.
+"""
+
+ERROR_PAGE = ("<!DOCTYPE html><html><head><title>404 Not Found</title></head>"
+              "<body><h1>Not Found</h1></body></html>")
+
+
+@pytest.mark.parametrize("body,why", [
+    (FETCH_TOOL_SUMMARY, "a fetch tool's summary"),
+    (ERROR_PAGE, "an error page"),
+    ("Sorry, I cannot access that URL.", "a refusal"),
+])
+def test_a_file_that_is_not_an_ads_txt_is_refused(body, why):
+    """Parsing it would yield zero records and the run would report a
+    confident absence for a document nobody read. The instruction not to save
+    a summary is a request; this is the control."""
+    c = Corpus()
+    c.add("https://weather.com/ads.txt", body)
+    doc = c.get("https://weather.com/ads.txt")
+    assert doc["rejected"], f"{why} was accepted as an ads.txt"
+    assert "not the file the site served" in doc["rejected"]
+
+
+@pytest.mark.parametrize("body,why", [
+    ("", "a genuinely empty file"),
+    ("# no sellers yet\n# contact ads@example.test\n", "comments only"),
+    ("OWNERDOMAIN=example.test\n", "variables but no records"),
+    ("adrelay.example, 123, DIRECT\n", "one record, no variables"),
+    ("\n\n# header\n\nadrelay.example, 123, DIRECT, abc\n\n", "blank lines"),
+])
+def test_a_real_ads_txt_is_never_refused(body, why):
+    """The check has to be structural, not suspicious. An empty or
+    comments-only ads.txt is legitimate and common: a site that declares
+    nothing yet still serves the file."""
+    c = Corpus()
+    c.add("https://x.example/ads.txt", body)
+    assert not c.get("https://x.example/ads.txt")["rejected"], why
+
+
+def test_a_sellers_json_that_is_not_json_at_all_is_refused():
+    c = Corpus()
+    c.add("https://ssp.example/sellers.json", "I can't return that file.")
+    doc = c.get("https://ssp.example/sellers.json")
+    assert doc["rejected"]
+    assert "does not begin as JSON" in doc["rejected"]
+
+
+def test_a_truncated_sellers_json_is_cut_short_not_refused():
+    """These are different findings and must not be confused: a cut-off file
+    still holds real records, and refusing it would throw them away."""
+    c = Corpus()
+    c.add("https://ssp.example/sellers.json", '{"sellers":[{"seller_id":"a"')
+    doc = c.get("https://ssp.example/sellers.json")
+    assert doc["truncated"] and not doc["rejected"]
+
+
+def test_the_report_refuses_to_call_it_an_absence(tmp_path):
+    """The whole point. The first version of this run reported "a site with no
+    advertising declarations publishes no payee" about weather.com."""
+    d = tmp_path / "f"
+    d.mkdir()
+    _write(d, "https://weather.com/ads.txt", FETCH_TOOL_SUMMARY, 1)
+    _write(d, "https://weather.com/app-ads.txt", "# none\n", 2)
+    text, _code = run("weather.com", "t", d)
+
+    assert "no advertising declarations" not in text
+    assert "not the documents they were named after" in text
+    assert "NOT THE DOCUMENT" in text
+    assert "INVALID RESULT" in text, "the result must not read as a normal one"
+    assert "**no — not the document**" in text, "the table must mark it"
+
+
+def test_a_refused_document_is_a_block_not_a_checked_absence(tmp_path):
+    """It produced no evidence, so it belongs with the blocks — never with
+    "checked and found nothing", which is a finding."""
+    d = tmp_path / "f"
+    d.mkdir()
+    _write(d, "https://weather.com/ads.txt", FETCH_TOOL_SUMMARY, 1)
+    corpus = Corpus.from_dir(d)
+    f = ReplayFetcher(corpus)
+    import asyncio
+    assert asyncio.run(f.get("https://weather.com/ads.txt")) is None
+    assert f.rejected and f.blocked
+    assert not f.checked_absent
+    assert f.count == 0, "a refused file must not count as a retrieval"

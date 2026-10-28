@@ -65,6 +65,15 @@ Rules that matter more here than anywhere else:
   checked", which is correct and useful. Never save an error page, a
   placeholder or your own summary in its place — it would be recorded, hashed
   and reported as what the site served.
+- **If your tool will not return the file verbatim, do not paste what it says
+  instead.** This is the common case on large files: a fetch tool answers "I
+  can't reproduce the full file" and offers a summary. A summary saved under
+  the document's name is refused — the run reports INVALID and names the file
+  — because a file that does not parse yields no records, and a report drawn
+  from it would state a confident absence for a document nobody read. Ask your
+  tool for the specific lines you need and say in your answer that the file
+  could not be read whole, or run the installed toolkit, which fetches it
+  itself.
 - **If your tool truncates a large response, save what you got.** Do not
   stitch, guess or fill the gap. A document that does not parse is detected as
   incomplete and any absence in it is reported as "not checked" rather than

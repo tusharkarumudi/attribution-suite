@@ -10,6 +10,42 @@ re-using it would mean force-deleting a public tag. The failure was a test of
 mine that demanded all four repositories be checked out; CI clones siblings on
 a best-effort basis by design, so it reported a checkout layout as a defect.
 
+- **A supplied file that is not the document is refused, not parsed.** Asked
+  for `weather.com/ads.txt` verbatim, a real assistant's fetch tool answered
+  "I can't reproduce the full file" and returned a structural summary. Saved
+  under the ads.txt name it parsed to zero records -- and the report then said
+  *"a site with no advertising declarations publishes no payee"* about a site
+  with about 185 of them. A confident absence drawn from a document nobody
+  read is the one inversion this toolkit exists to prevent, and the
+  instruction not to save a summary turned out to be a request rather than a
+  control.
+
+  The test is structural, not a guess at intent: every non-comment line of a
+  real ads.txt parses as a record or a variable, and a real sellers.json
+  parses as JSON or is a cut-off prefix of one. An empty or comments-only
+  ads.txt is legitimate and still passes -- five cases assert that, because an
+  over-eager check would throw away real files. A refused document is recorded
+  as a block, never as "checked and found nothing"; the run is marked INVALID
+  rather than merely incomplete; and the executive summary says the files were
+  never read instead of offering an absence.
+
+- **The bundle's loader no longer calls `exec`.** It subclasses
+  `importlib.abc.InspectLoader` and hands the embedded source to the import
+  machinery, which compiles and runs it. The first version called
+  `exec(compile(...))` directly -- a Medium severity, High confidence bandit
+  finding (B102) sitting under `src/`, which failed the static-analysis step
+  of every one of the four CI workflows. The tempting fix was `--exclude`,
+  repeated in four workflow files and `VERIFY.sh`, each free to drift and
+  each leaving the generated code unscanned. A test now asserts the bundle
+  calls neither `exec` nor `eval`, and a second asserts no bandit invocation
+  anywhere excludes it.
+- **`_is_fetchable` judges addresses by what they are.** It carried a denylist
+  of literals plus an RFC1918 regex, which missed IPv6 entirely, missed
+  carrier-grade NAT, and tripped bandit's B104 by containing a bare
+  `"0.0.0.0"` -- suppressed with a `nosec` that was itself on the wrong line.
+  It now uses `ipaddress`: `is_global and not is_multicast`, swept against
+  every special-purpose range in a parametrised test. No suppression left in
+  the package.
 - **The version-consistency check no longer hard-fails on a single-repo
   checkout.** The non-vacuous guard now sits on this repository's own package,
   which is always present, and siblings are checked when they are there.
@@ -140,8 +176,6 @@ source. Asserted in CI like the other six.
   command now say how each is to be used: lead from the summary, pass the
   mermaid fence through unchanged or describe it in a sentence, and never pass
   a `DEMOTED` indicator on as a clean one.
-
-
 
 - **`--cloaking-check` closes the selective-serving gap.** A material
   difference raises `SELECTIVE SERVING` and states that the findings describe

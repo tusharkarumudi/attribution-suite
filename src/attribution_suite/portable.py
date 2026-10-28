@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import re
 from dataclasses import dataclass, field
@@ -143,6 +144,7 @@ class Corpus:
             "sha256": hashlib.sha256(body.encode("utf-8", "replace")).hexdigest(),
             "bytes": len(body.encode("utf-8", "replace")),
             "retrieved_at": "", "truncated": self._looks_truncated(kind, body),
+            "rejected": self._wrong_document(kind, body),
             "file": name,
         }
 
@@ -156,7 +158,48 @@ class Corpus:
             "bytes": len(body.encode("utf-8", "replace")),
             "retrieved_at": retrieved_at or _utc(),
             "truncated": truncated,
+            "rejected": self._wrong_document(kind, body),
         }
+
+    @staticmethod
+    def _wrong_document(kind: str, body: str) -> str:
+        """Why this file is not the document it is named after, or "".
+
+        The case that forced this: asked for `weather.com/ads.txt` verbatim, an
+        assistant's fetch tool answered "I can't reproduce the full file" and
+        returned a structural summary instead. Saved under the ads.txt name it
+        parsed to zero records -- and the report then said "a site with no
+        advertising declarations publishes no payee" about a site with about
+        185 of them. A confident absence drawn from a document that was never
+        read is the one inversion this toolkit exists to prevent, and the
+        instruction not to save a summary is not a control: it is a request.
+
+        The test is structural, not a guess about intent. Every non-comment,
+        non-blank line of a real ads.txt parses as a record or a variable, and
+        a real sellers.json parses as JSON or is a cut-off prefix of one. An
+        empty or comments-only ads.txt is legitimate and must pass.
+        """
+        if not body.strip():
+            return ""                      # legitimately empty
+        if kind in {"ads_txt", "app_ads_txt"}:
+            from paytrace.adstxt import parse
+
+            meaningful = [ln for ln in body.splitlines()
+                          if ln.strip() and not ln.lstrip().startswith("#")]
+            if not meaningful:
+                return ""                  # comments only: legitimate
+            ads = parse(body, "")
+            if not ads.accounts and not ads.variables:
+                return ("none of its lines parse as an ads.txt record or "
+                        "variable, so this is not the file the site served "
+                        "— most often a fetch tool's summary or an error page "
+                        "saved in its place")
+            return ""
+        if kind in STRUCTURED and body.lstrip()[:1] not in {"{", "["}:
+            return ("it does not begin as JSON, so this is not the "
+                    "sellers.json the ad system served — most often a "
+                    "fetch tool's summary or an error page")
+        return ""
 
     @staticmethod
     def _looks_truncated(kind: str, body: str) -> bool:
@@ -186,6 +229,7 @@ class Corpus:
             doc["url"] = url
             doc["kind"] = doc["kind"] or _slug(url)[0]
             doc["truncated"] = self._looks_truncated(doc["kind"], doc["body"])
+            doc["rejected"] = self._wrong_document(doc["kind"], doc["body"])
         return doc
 
 
@@ -217,6 +261,8 @@ class ReplayFetcher:
         self.blocked_by_collector: dict[str, int] = {}
         self.checked_absent: list[tuple[str, str]] = []
         self.truncated_reads: list[tuple[str, str]] = []
+        #: Saved files that are not the document they are named after.
+        self.rejected: list[tuple[str, str]] = []
         self.count = 0
         self.tls_intercepted = ""
         # Only the attributes something actually reads off a fetcher.
@@ -239,6 +285,14 @@ class ReplayFetcher:
         doc = self.corpus.get(url)
         if doc is None:
             self._want(url)
+            return None
+        if doc["rejected"]:
+            # Not served at all. Parsing it would produce zero records and the
+            # run would report a confident absence for a document nobody
+            # read. Recorded as a block, which is what it is: this retrieval
+            # produced no usable evidence.
+            self.note_block(url, f"the saved file was refused: {doc['rejected']}")
+            self.rejected.append((url, doc["rejected"]))
             return None
         self.count += 1
         if doc["truncated"]:
@@ -396,19 +450,29 @@ def _is_fetchable(url: str) -> bool:
     confusing failure at best; at worst the assistant fetches something on
     whatever machine it is running on.
     """
-    m = re.match(r"https?://([^/:]+)", url or "")
+    m = re.match(r"https?://(\[[^\]]+\]|[^/:]+)", url or "")
     if not m:
         return False
-    host = m.group(1).lower()
-    # A DENYLIST of hosts never to ask an assistant to fetch -- not an address
-    # to bind a listener to. The scanner matches the literal wherever it
-    # appears, hence the marker on the line itself.
-    if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:  # nosec B104
-        return False
-    if host.endswith((".local", ".internal", ".localdomain")):
-        return False
-    if re.match(r"^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)",
-                host):
+    host = m.group(1).lower().strip("[]")
+
+    # Address literals are judged by what the address IS, not by matching
+    # strings. The first version carried a denylist of literals plus a regex
+    # for RFC1918 -- which missed IPv6 entirely, missed carrier-grade NAT, and
+    # tripped a scanner that reads a bare "0.0.0.0" anywhere as a listener
+    # binding to every interface. `ipaddress` already knows all of this.
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        # One predicate, not an enumeration. Listing the individual properties
+        # still missed carrier-grade NAT (100.64.0.0/10), which is exactly the
+        # kind of gap a hand-maintained list grows; `is_global` is false for
+        # every range that is not publicly routable, including that one.
+        return bool(ip.is_global) and not ip.is_multicast
+
+    if host == "localhost" or host.endswith(
+            (".local", ".internal", ".localdomain", ".localhost")):
         return False
     return "." in host
 
@@ -537,6 +601,13 @@ def run(domain: str, authorization: str, directory: str | Path | None = None,
         "result_complete": not (fetcher.blocked or fetcher.truncated_reads),
         "offline_replay": True,
     }
+    if fetcher.rejected:
+        # Not merely incomplete. A document was supplied that is not the
+        # document, so the evidence set is missing pieces in a way nothing
+        # here can bound -- which is what `result_valid: false` means, and it
+        # stops the summary reporting an absence as a finding.
+        status["result_valid"] = False
+        status["documents_rejected"] = len(fetcher.rejected)
     if link_report is not None and link_report.matched:
         status["gravatar_links"] = len(link_report.matched)
     _ = allowed
@@ -597,12 +668,40 @@ def _integrity_notes(corpus: Corpus, fetcher: ReplayFetcher) -> list[str]:
         "",
         "## Documents read",
         "",
-        "| Document | Bytes | SHA-256 | Complete |",
+        "| Document | Bytes | SHA-256 | Usable |",
         "|---|---|---|---|",
     ]
     for d in sorted(used, key=lambda x: x["url"]):
-        ok = "no — cut short" if d["truncated"] else "yes"
+        if d["rejected"]:
+            ok = "**no — not the document**"
+        elif d["truncated"]:
+            ok = "partial — cut short"
+        else:
+            ok = "yes"
         out.append(f"| `{d['url']}` | {d['bytes']} | `{d['sha256'][:16]}…` | {ok} |")
+    bad = [d for d in used if d["rejected"]]
+    if bad:
+        out += [
+            "",
+            f"## :: {len(bad)} SAVED FILE(S) ARE NOT THE DOCUMENT ::",
+            "",
+            "These were refused rather than parsed. A file that does not "
+            "parse as what it is named yields no records, and a run that "
+            "parsed it would report a confident absence for a document "
+            "nobody read — the one inversion this toolkit exists to prevent. "
+            "The usual cause is a fetch tool that summarises instead of "
+            "returning bytes, or an error page saved in place of the file.",
+            "",
+        ]
+        for d in bad:
+            out.append(f"- `{d['url']}` — {d['rejected']}")
+        out += [
+            "",
+            "**Fetch these again and save the response body byte for byte.** "
+            "If your tool will not return a large file verbatim, ask it for "
+            "the specific lines you need and run the installed toolkit for the "
+            "rest; do not paste a description of the file.",
+        ]
     if cut:
         out += [
             "",
