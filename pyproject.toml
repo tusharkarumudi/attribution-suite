@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "attribution-suite"
-version = "2.0.24"
+version = "2.0.25"
 description = "One install and one CLI over the attribution-graph toolchain"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,8 +26,15 @@ dependencies = [
   # in paytrace 2.0.24. With the old `>=2.0.1` pins, upgrading only this
   # package resolved to siblings without those APIs and every run died with
   # `TypeError: Engine.run() got an unexpected keyword argument`.
+  #
+  # paytrace 2.0.27 is required for correctness rather than for an API. Before
+  # it, the pinned transport took CA trust from SSL_CERT_FILE even on a
+  # `direct` egress and left `tls_intercepted` unset -- so captures were
+  # recorded as though the origin served them when a proxy had. This package's
+  # reports and manifests state that interception is tracked, and with an older
+  # paytrace underneath that statement is false.
   "attribution-graph>=2.0.8,<2.1",
-  "paytrace>=2.0.26,<2.1",
+  "paytrace>=2.0.27,<2.1",
   "handle-correlation>=2.0.1,<2.1",
 ]
 

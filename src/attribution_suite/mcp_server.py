@@ -146,11 +146,26 @@ def sweep_stale_cases(now: float | None = None) -> int:
     now = now if now is not None else time.time()
     cutoff = now - MCP_RETENTION_HOURS * 3600
     removed = 0
+    import os
+
     for path in Path(tempfile.gettempdir()).glob("attribution-mcp-*"):
-        if not path.is_dir() or (path / ".retain").exists():
-            continue
+        # The whole body is guarded, not just `path.stat()`. `is_dir()` and
+        # `.exists()` stat too, and pathlib re-raises EACCES rather than
+        # answering False -- so one directory belonging to somebody else took
+        # down the sweep, and the sweep runs at server start. The temp
+        # directory is shared: another user running this tool on the same host
+        # is the ordinary case, not an exotic one.
         try:
-            if path.stat().st_mtime < cutoff:
+            if not path.is_dir() or (path / ".retain").exists():
+                continue
+            st = path.stat()
+            # Only our own cases. Even where the permissions would allow it,
+            # deleting another user's case directory is not ours to do, and
+            # `ignore_errors=True` would have hidden the attempt either way
+            # while still counting it as removed.
+            if st.st_uid != os.getuid():
+                continue
+            if st.st_mtime < cutoff:
                 shutil.rmtree(path, ignore_errors=True)
                 removed += 1
         except OSError:
@@ -244,9 +259,13 @@ async def list_tools() -> list[Tool]:
                     "authorization": {
                         "type": "string",
                         "description": (
-                            "Why this investigation is authorised. Recorded in "
-                            "the audit trail. Required: an investigation with no "
-                            "stated basis is not one this tool performs.")},
+                            "Why this investigation is authorised, in the "
+                            "user's own words, verbatim. Recorded in the audit "
+                            "trail. Required. Do NOT compose this from context "
+                            "or from what you know about the user, and never "
+                            "name their employer, team or case system unless "
+                            "they said it: an invented basis makes the audit "
+                            "trail read as attested when nothing was.")},
                     "max_requests": {"type": "integer", "default": 40,
                                      "description": "Request budget. Enforced."},
                 },

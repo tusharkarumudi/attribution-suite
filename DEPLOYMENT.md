@@ -85,8 +85,10 @@ fault, and prints the one-line remedy if you want them anyway.
 Python 3.11–3.14. The four packages release together and **must be on the same
 version** — `attribution version` warns if they diverge.
 
-Console scripts: `attribution`, `attribution-mcp`, `paytrace`,
-`paytrace-index`, `handlecorr`.
+Console scripts: `attribution` and `attribution-mcp` are on PATH after a pipx
+install. `attribution-suite` is an alias of `attribution`. `paytrace`,
+`paytrace-index` and `handlecorr` are the dependency packages' own commands,
+installed but not exposed — see the paragraph above.
 
 ## 2. The case file
 
@@ -180,7 +182,28 @@ document shared on its own has no exit code attached to it.
 
 ## 4. What lands in `./out`
 
+Each `--domain` run gets its own directory, named after the domain:
+
 ```
+out/
+  example.com/        <- one investigation
+  other-site.test/    <- another; nothing is overwritten
+  example.com-2/      <- a second run of example.com, kept alongside the first
+```
+
+A repeat of the same domain is **not** written over the top of the earlier run:
+these directories hold an evidence package whose manifest commits to the bytes
+retrieved, and an audit trail of what was asked and when. The suffixed sibling
+costs a directory and keeps both records.
+
+`--domains FILE` produces the same layout, one directory per entry.
+`attribution run --case FILE` writes straight into `--out`, because a case file
+can carry several seeds and whoever wrote it chose the layout.
+
+Inside one of those directories:
+
+```
+case.yaml                       the case file, for a --domain run
 attribution_report.md / .html   findings, with a status banner if not clean
 investigation_graph.json        the claim graph
 entities.ftm.json               FollowTheMoney entities
@@ -212,7 +235,7 @@ bytes.
 ## 5. Evidence
 
 ```bash
-attribution verify ./out/evidence
+attribution verify ./out/example.com/evidence
 ```
 
 This reads the manifest as **data**. The package also ships a standalone

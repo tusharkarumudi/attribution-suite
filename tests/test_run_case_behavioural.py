@@ -752,20 +752,34 @@ def test_a_domain_list_is_parsed_forgivingly(tmp_path, monkeypatch, capsys):
     assert rc == 0
 
 
-def test_each_domain_gets_its_own_report_directory(tmp_path, monkeypatch):
-    """One shared --out would have each run overwrite the last."""
+def test_the_batch_hands_each_domain_the_shared_root(tmp_path, monkeypatch):
+    """What `_run_batch` is responsible for: iterating, not naming.
+
+    It used to build `<out>/<domain>` itself, and a single `--domain` run got
+    no subdirectory at all -- so every search wrote into the same folder and
+    overwrote the last one's report and evidence package. Naming moved into
+    `_run`, which both routes go through, leaving one place to keep correct.
+    Leaving the old behaviour here as well produced `<out>/<domain>/<domain>`.
+
+    So this asserts the contract at this seam -- the same root, one distinct
+    domain per call -- and the directory names themselves are checked
+    end-to-end through `main` in `test_output_layout.py`.
+    """
     import argparse
 
     from attribution_suite import cli
 
     listing = tmp_path / "d.txt"
     listing.write_text("a.example\nb.example\n")
-    outs = []
-    monkeypatch.setattr(cli, "_run", lambda ns: outs.append(ns.out) or 0)
-    cli._run_batch(argparse.Namespace(domains=str(listing),
-                                      out=str(tmp_path / "out"), domain=None))
-    assert len(set(outs)) == 2
-    assert all(o.endswith(("a.example", "b.example")) for o in outs)
+    seen = []
+    monkeypatch.setattr(cli, "_run",
+                        lambda ns: seen.append((ns.out, ns.domain)) or 0)
+    root = str(tmp_path / "out")
+    cli._run_batch(argparse.Namespace(domains=str(listing), out=root,
+                                      domain=None))
+    assert [d for _o, d in seen] == ["a.example", "b.example"]
+    assert {o for o, _d in seen} == {root}, (
+        "the batch is naming the per-domain directory again; `_run` does that")
 
 
 def test_one_failing_domain_does_not_abort_the_batch(tmp_path, monkeypatch, capsys):

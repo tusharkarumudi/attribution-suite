@@ -14,8 +14,16 @@ inferable from the output.
 
 1. Take the domain out of `$ARGUMENTS`. If there is none, ask for one and stop.
 2. Ask the user **why this investigation is authorised**, in one line, unless
-   `$ARGUMENTS` already says. Pass it verbatim. Do not invent one. A run
-   without it records itself as unattested in the audit trail.
+   `$ARGUMENTS` already says. Pass their words **verbatim**.
+
+   **Never compose one.** Not from the conversation, not from what you know
+   about the user, and above all not from their employer, team or case-numbering
+   scheme — a string like `"<Employer> ad-fraud investigation, case XYZ"` that
+   the user never said is worse than no authorisation at all, because the audit
+   trail then reads as attested when nothing was attested and it names an
+   organisation in a record they did not write. If they have not said, ask. If
+   they decline, pass nothing: the run records itself as **unattested**, which
+   is accurate.
 3. Work out which mode you are in, with one command. Do not guess, and do
    not try to install anything — `pip install` is refused in most chat
    sandboxes and the MCP server's `uvx` hits the same wall.
@@ -40,9 +48,18 @@ inferable from the output.
 
    It prints the URLs to fetch and the filename for each. Fetch them with your
    own browsing tool, save the bodies verbatim in `./fetched/`, run it again.
-   Two rounds is normal. Never save a summary, an error page or a placeholder
-   in place of a document; if a fetch is truncated, save what you got and let
-   the tool detect it.
+   Two rounds is normal.
+
+   **When a `sellers.json` is too large for your fetch tool** — the usual
+   case, and the one that otherwise leaves the payee unnamed — the plan prints
+   a ready-to-paste request for the single record, naming the `seller_id`. Use
+   it and save the answer under the `..._extract-...` filename given. A quoted
+   record proves that record exists; it can never show one is missing, and the
+   run labels every finding that came from one.
+
+   Never save a summary, an error page or a placeholder in place of a
+   document; if a fetch is truncated, save what you got and let the tool
+   detect it.
 4. If every retrieval is blocked, check the warnings before concluding
    anything. A proxy in this environment is adopted automatically, so there is
    no flag to add. `host(s) could not be reached from this machine` means an

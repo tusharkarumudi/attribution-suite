@@ -13,9 +13,11 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import re
 import sys
 from pathlib import Path
 
+from . import install
 from .install import extra_hint, install_mode
 from .investigator import Refused
 from .runner import run_case
@@ -27,6 +29,62 @@ from .version import banner, versions
 #: one-command convenience must not fake one, so it records its own absence --
 #: visibly, in the audit trail and the report.
 UNATTESTED = "unattested: --domain convenience invocation, no authority asserted"
+
+
+def _domain_slug(domain: str) -> str:
+    """A single safe path component for a domain from the command line.
+
+    `--domain` is user input that becomes a directory name, so it is reduced to
+    a host and checked rather than trusted: a value like
+    `../../etc` or `https://x/..%2f` must not place an evidence package outside
+    the directory the user named.
+    """
+    name = (domain or "").strip().lower()
+    name = name.removeprefix("http://").removeprefix("https://").split("/")[0]
+    name = name.split("?")[0].split("#")[0].strip(". ")
+    # Anything that is not a hostname character cannot survive into a path.
+    name = re.sub(r"[^a-z0-9.\-_]", "_", name)
+    name = re.sub(r"\.{2,}", ".", name).strip("._-")
+    return name or "domain"
+
+
+def _case_dir(out_root: Path, domain: str) -> Path:
+    """`<out>/<domain>`, or the next free `-2`, `-3` beside it.
+
+    Everything used to land directly in `<out>`, so a second investigation
+    overwrote the first one's report and evidence package.
+
+    It does not overwrite a previous run of the SAME domain either. These
+    directories hold an evidence package whose manifest commits to the bytes
+    retrieved and an audit trail of what was asked and when; replacing one in
+    place destroys a record somebody may already be relying on, and does it
+    silently. A suffixed sibling costs a directory and keeps both.
+
+    "Already used" means a report or an evidence package is there -- not merely
+    that the directory exists, so a path the user pre-created, or one holding
+    only the `case.yaml` this run just wrote, is still used as-is.
+    """
+    def in_use(d: Path) -> bool:
+        if not d.is_dir():
+            return False
+        try:
+            return any(c.name not in ("case.yaml",) for c in d.iterdir())
+        except OSError:
+            # Unreadable means we cannot tell, and cannot write there either.
+            return True
+
+    base = out_root / _domain_slug(domain)
+    if not in_use(base):
+        return base
+    for n in range(2, 1000):
+        candidate = out_root / f"{_domain_slug(domain)}-{n}"
+        if not in_use(candidate):
+            return candidate
+    # 998 runs of one domain in one output root: take the timestamp and move on
+    # rather than failing the investigation over a directory name.
+    import datetime
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return out_root / f"{_domain_slug(domain)}-{stamp}"
 
 
 def _synth_case(domain: str, authorization: str | None, outdir: Path,
@@ -397,6 +455,11 @@ def _doctor(a: argparse.Namespace) -> int:
 
     ok = True
     mode = install_mode()
+    #: Exact commands to fix what this run found, printed together at the end.
+    #: Scattering hints beside each line left a reader to assemble them, and
+    #: the one that mattered most -- that the sibling COMMANDS are absent while
+    #: the packages are installed -- read as a failed install.
+    todo: list[tuple[str, str]] = []
 
     print("INSTALL")
     print(f"  {mode:8} {sys.prefix}")
@@ -425,21 +488,30 @@ def _doctor(a: argparse.Namespace) -> int:
         print(f"  {'ok' if where else 'x '} {cmd:20} {where or 'NOT ON PATH'}")
         ok = ok and bool(where)
 
-    # The three below belong to the dependencies. pipx exposes only the apps of
-    # the package it was asked to install, so their absence under pipx is how
-    # pipx works -- not a broken install, and not a reason to fail the check.
+    # The three below belong to the dependency packages. pipx installs those
+    # packages -- they are ordinary dependencies -- but exposes only the apps
+    # of the package it was asked about. So their absence under pipx is how
+    # pipx works, not a broken install.
+    #
+    # It used to print a bare "NOT ON PATH" here, beside a list that reads
+    # like missing packages, and a user reasonably concluded the install had
+    # failed and injected packages that were already present. The library
+    # being importable is the thing that matters, so that is stated.
     extra = [(cmd, shutil.which(cmd))
              for cmd in ("paytrace", "paytrace-index", "handlecorr")]
+    sibling_hint = install.sibling_apps_hint()
     for cmd, where in extra:
         if where:
-            mark = "ok"
+            print(f"  ok {cmd:20} {where}")
         elif mode == "pipx":
-            mark = "--"
+            print(f"  -- {cmd:20} command not exposed by pipx "
+                  f"(the package IS installed — see VERSIONS)")
         else:
-            mark = "x "
-        print(f"  {mark} {cmd:20} {where or 'NOT ON PATH'}")
-        if not where and mode != "pipx":
+            print(f"  x  {cmd:20} NOT ON PATH")
             ok = False
+    if sibling_hint and any(w is None for _, w in extra):
+        todo.append((sibling_hint,
+                     "puts paytrace, paytrace-index and handlecorr on PATH"))
     if mode == "pipx" and any(w is None for _, w in extra):
         print("  The three above come from the dependencies; pipx does not put "
               "a dependency's\n"
@@ -459,8 +531,17 @@ def _doctor(a: argparse.Namespace) -> int:
     from .investigator import DEFAULT_MODEL
     print(f"  {'set  ' if key_set else 'unset'}  ANTHROPIC_API_KEY")
     sdk_fix = extra_hint("llm", "anthropic")
-    print(f"  {'ok   ' if sdk else 'x    '}  anthropic SDK"
-          + ("" if sdk else f"   {sdk_fix}"))
+    if not sdk:
+        todo.append((sdk_fix,
+                     "optional: adaptive planning for `attribution ask`"))
+    # `x` is promised to mean "this blocks an investigation" by the legend under
+    # TO FIX. A missing SDK with no key set does not: the fixed-rule planner is
+    # a supported mode, which the line below says in words. Marking it `x`
+    # anyway contradicted both that sentence and the legend, so the marker
+    # follows the key -- absent SDK *with* a key set is a real inconsistency,
+    # because setting the key says you wanted the other planner.
+    print(f"  {'ok   ' if sdk else ('x    ' if key_set else '--   ')}  "
+          f"anthropic SDK" + ("" if sdk else f"   {sdk_fix}"))
     print(f"  model  {DEFAULT_MODEL}   (override with ANTHROPIC_MODEL)")
     if key_set and not sdk:
         ok = False
@@ -481,19 +562,51 @@ def _doctor(a: argparse.Namespace) -> int:
                              Path.cwd() / ".claude" / "skills"
                              / "ad-attribution")
                  if (d / "SKILL.md").exists()]
-    if installed:
-        for d in installed:
+    shipped_digest = _skill_digest(SKILL_DIR)
+    stale = [d for d in installed if _skill_digest(d) != shipped_digest]
+    for d in installed:
+        if d in stale:
+            print(f"  x  host copy is STALE      {d}")
+        else:
             print(f"  ok installed for a host  {d}")
-    else:
+    if not installed:
         print("  -- not installed for a host   attribution skill --install")
+        todo.append(("attribution skill --install",
+                     "for Claude Code and the desktop app"))
+    if stale:
+        # Not a warning: a host reading superseded rules is the failure the
+        # skill exists to prevent, and it presents as the model misbehaving.
+        ok = False
+        print("     an upgrade replaced the shipped skill; this copy predates "
+              "it and the\n     host is reading the older rules.")
+        for d in stale:
+            flags = "--force" if d == DEFAULT_SKILL_HOME else f"--force --to {d}"
+            todo.append((f"attribution skill --install {flags}",
+                         "refresh the stale host copy"))
+    print(f"  {'ok' if (SKILL_DIR / 'attribution_portable.py').exists() else 'x '}"
+          f" offline bundle          "
+          f"{SKILL_DIR / 'attribution_portable.py'}")
+
+    # The MCP server needs two separate things and they fail separately: the
+    # SDK (a library) and the launcher on PATH (a console script). Reporting
+    # them as two dashes with one hint between them left it unclear which was
+    # missing and which command fixed which.
     mcp_sdk = importlib.util.find_spec("mcp") is not None
     mcp_bin = shutil.which("attribution-mcp")
-    print(f"  {'ok' if mcp_sdk else '--'} mcp SDK"
-          + ("" if mcp_sdk else f"                 {extra_hint('mcp', 'mcp')}"))
+    print(f"  {'ok' if mcp_sdk else '--'} mcp SDK                 "
+          f"{'present' if mcp_sdk else 'not installed — the MCP server cannot start'}")
     print(f"  {'ok' if mcp_bin else '--'} attribution-mcp         "
-          f"{mcp_bin or 'not on PATH'}")
+          f"{mcp_bin or 'launcher not on PATH'}")
+    if not mcp_sdk:
+        todo.append((extra_hint("mcp", "mcp"), "the MCP server's SDK"))
+    if mcp_sdk and not mcp_bin and mode == "pipx":
+        todo.append(("pipx install --force attribution-suite",
+                     "re-exposes the attribution-mcp launcher"))
     if mcp_sdk and mcp_bin:
-        print("  attribution skill --mcp-config  prints the host entry")
+        print("  attribution skill --mcp-config  prints the host entry to paste")
+    else:
+        print("  the host entry is printed by `attribution skill --mcp-config` "
+              "once both lines above are ok")
 
     print("\nOPTIONAL KEYS (absent means that source is skipped, not broken)")
     for env, what in (("CH_API_KEY", "UK Companies House officers and PSC"),
@@ -526,16 +639,30 @@ def _doctor(a: argparse.Namespace) -> int:
 
         from paytrace import Fetcher
 
+        # The probe must answer the question a reader is asking -- "will a run
+        # reach the network from here?" -- so it builds its egress the way a
+        # run does. A bare `Fetcher` has only a `direct` egress, and a direct
+        # egress deliberately does not trust a CA named by the environment, so
+        # behind an intercepting proxy the probe failed TLS and reported no
+        # outbound connectivity on a machine where every real run works.
+        from .runner import _egress_pool
+
         async def probe():
-            f = Fetcher(user_agent="attribution-suite doctor")
+            f = Fetcher(user_agent="attribution-suite doctor",
+                        egress=_egress_pool(None, True, []))
             try:
-                return await f.get("https://pypi.org/robots.txt")
+                return await f.get("https://pypi.org/robots.txt"), f
             finally:
                 await f.aclose()
 
-        r = asyncio.run(probe())
+        r, probe_fetcher = asyncio.run(probe())
         print("  ok outbound HTTPS works" if r and r.status == 200
               else f"  x probe returned {getattr(r, 'status', 'nothing')}")
+        if getattr(probe_fetcher, "tls_intercepted", ""):
+            print("     TLS was terminated by this environment's proxy and its "
+                  "CA was trusted so\n     that HTTPS could work at all. A "
+                  "capture then proves what the proxy served,\n     not what "
+                  "the origin served, and every run from here records that.")
         ok = ok and bool(r and r.status == 200)
     except Exception as e:
         ok = False
@@ -543,6 +670,23 @@ def _doctor(a: argparse.Namespace) -> int:
 
     print("\n" + ("Ready. Try:  attribution-suite --domain example.com"
                   if ok else "Something above needs attention."))
+
+    if todo:
+        print("\nTO FIX — copy and run")
+        print(f"  install method detected: {mode}")
+        single = [(c, w) for c, w in todo if "\n" not in c]
+        width = max((len(c) for c, _w in single), default=0)
+        for cmd, why in dict.fromkeys(todo):
+            if "\n" in cmd:
+                head, *rest = cmd.splitlines()
+                print(f"    {head.ljust(width)}   # {why}")
+                for line in rest:
+                    print(f"    {line}")
+            else:
+                print(f"    {cmd.ljust(width)}   # {why}")
+        print("\n  Nothing above blocks an investigation unless it is marked "
+              "`x`. A `--` is an\n  optional or environment-specific gap, and "
+              "the command beside it is what closes it.")
     return 0 if ok else 1
 
 
@@ -598,6 +742,36 @@ def _bundle_skill(out_dir: Path) -> int:
     print("skills directory. INSTALL.md inside covers every route, including")
     print("the MCP server for hosts that have no shell.")
     return 0
+
+
+def _skill_digest(directory: Path) -> str:
+    """A digest over every file in a skill directory, path and bytes.
+
+    `skill --install` copies the directory, so an upgraded package leaves the
+    host's copy untouched and older than the tool it documents -- and the
+    symptom is a model following superseded rules, which looks like a model
+    problem and not an install one. Nothing in the copy records a version, and
+    adding a stamp file would only be as reliable as the install that wrote it,
+    so compare the content itself.
+
+    Files are visited in sorted order so the digest does not depend on the order
+    the filesystem hands them back. The relative path is mixed in as well, which
+    costs nothing and covers a file moving between directories with its contents
+    unchanged; every other kind of drift already changes the byte stream.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    if not directory.is_dir():
+        return ""
+    for f in sorted(p for p in directory.rglob("*") if p.is_file()):
+        if "__pycache__" in f.parts:
+            continue
+        h.update(str(f.relative_to(directory)).encode())
+        h.update(b"\0")
+        h.update(f.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
 
 
 def _skill(a: argparse.Namespace) -> int:
@@ -732,7 +906,9 @@ def _run_batch(a: argparse.Namespace) -> int:
     for n, domain in enumerate(domains, 1):
         print(f"[{n}/{len(domains)}] {domain}")
         one = argparse.Namespace(**vars(a))
-        one.domains, one.domain, one.out = None, domain, str(root / domain)
+        # `str(root)`, not `root / domain`: `_run` names the per-domain
+        # directory now, for single runs and batch alike.
+        one.domains, one.domain, one.out = None, domain, str(root)
         try:
             rc = _run(one)
         except KeyboardInterrupt:
@@ -791,6 +967,13 @@ def _run(a: argparse.Namespace) -> int:
 
     if getattr(a, "domains", None):
         return _run_batch(a)
+
+    # Every `--domain` run gets its own directory under `--out`, named after
+    # the domain. Done here rather than in `_run_batch` so both routes use one
+    # code path: the batch used to build `<out>/<domain>` itself, which meant
+    # two places to keep in step and nothing at all for a single run.
+    if a.domain:
+        a.out = str(_case_dir(Path(a.out), a.domain))
 
     if getattr(a, "robin_query", None) and not a.robin:
         produced = _run_robin(a.robin_query, Path(a.out))

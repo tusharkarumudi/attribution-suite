@@ -69,8 +69,9 @@ def _never_write_into_the_repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
-def _write(d: Path, url: str, body: str, seq: int = 1) -> Path:
-    p = d / filename_for(url, seq)
+def _write(d: Path, url: str, body: str, seq: int = 1, *,
+           extract: bool = False) -> Path:
+    p = d / filename_for(url, seq, extract=extract)
     p.write_text(body)
     return p
 
@@ -512,9 +513,21 @@ ERROR_PAGE = ("<!DOCTYPE html><html><head><title>404 Not Found</title></head>"
               "<body><h1>Not Found</h1></body></html>")
 
 
+def test_an_html_error_page_is_an_absence_not_a_bad_document():
+    """These two verdicts were in conflict and the absence reading is right.
+
+    A server that answers /ads.txt with HTML -- a 404 page or its own app --
+    is saying the file is not there. That is a finding an analyst can use.
+    Only non-HTML content that fails to parse is "not the document", which is
+    the fetch-tool-summary case.
+    """
+    c = Corpus()
+    c.add("https://x.example/ads.txt", ERROR_PAGE)
+    assert not c.get("https://x.example/ads.txt")["rejected"]
+
+
 @pytest.mark.parametrize("body,why", [
     (FETCH_TOOL_SUMMARY, "a fetch tool's summary"),
-    (ERROR_PAGE, "an error page"),
     ("Sorry, I cannot access that URL.", "a refusal"),
 ])
 def test_a_file_that_is_not_an_ads_txt_is_refused(body, why):
@@ -590,3 +603,136 @@ def test_a_refused_document_is_a_block_not_a_checked_absence(tmp_path):
     assert f.rejected and f.blocked
     assert not f.checked_absent
     assert f.count == 0, "a refused file must not count as a retrieval"
+
+
+# ---- extracts: the route for files a fetch tool will not return ------------ #
+
+ONE_RECORD = json.dumps({"sellers": [
+    {"seller_id": "2397", "name": "Example Downloader Media Ltd",
+     "domain": "storiesdown-example.test", "seller_type": "PUBLISHER"}]})
+
+
+@pytest.fixture
+def chain(tmp_path):
+    """A real shape: the ads.txt names a MANAGERDOMAIN and one DIRECT seller,
+    and the payee is one record in that manager's sellers.json."""
+    d = tmp_path / "f"
+    d.mkdir()
+    _write(d, "https://viewer-example.test/ads.txt",
+           "OWNERDOMAIN=storiesdown-example.test\n"
+           "MANAGERDOMAIN=pubpower-example.io\n"
+           "pubpower-example.io, 2397, DIRECT\n", 1)
+    _write(d, "https://viewer-example.test/app-ads.txt", "# none\n", 2)
+    _write(d, "https://pubpower-example.io/ads.txt",
+           "pubpower-example.io, 2397, DIRECT\n", 3)
+    _write(d, "https://pubpower-example.io/app-ads.txt", "# none\n", 4)
+    _write(d, "https://storiesdown-example.test/ads.txt",
+           "OWNERDOMAIN=storiesdown-example.test\n"
+           "pubpower-example.io, 2397, DIRECT\n", 5)
+    _write(d, "https://storiesdown-example.test/app-ads.txt", "# none\n", 6)
+    _write(d, "https://www.pubpower-example.io/sellers.json", '{"sellers":[]}', 9)
+    return d
+
+
+def test_the_plan_offers_a_one_record_request_naming_the_seller(chain):
+    """The gap that stopped a real investigation one step from the answer: the
+    ads.txt named the seller, the payee was that one record, and the fetch
+    tool would not return the file it lives in."""
+    text, code = run("viewer-example.test", "t", chain)
+    assert code == 3
+    assert "ask for one record instead" in text
+    assert 'seller_id is exactly "2397"' in text, \
+        "the prompt must name the record, or it is not a usable request"
+    assert "sellers_json_extract-pubpower-example.io" in text
+
+
+def test_a_one_record_extract_names_the_payee(chain):
+    """The payoff. A short quote any fetch tool will answer, and the name
+    appears -- which is what the whole-file route could not deliver."""
+    _write(chain, "https://pubpower-example.io/sellers.json", ONE_RECORD, 7,
+           extract=True)
+    text, code = run("viewer-example.test", "t", chain)
+    assert code == 0
+    assert "Example Downloader Media Ltd" in text
+    assert "## Payees named by the ad systems" in text
+    assert "sellers.json **extract**" in text
+    assert "lead until a statutory register corroborates it" in text
+
+
+def test_an_extract_can_never_establish_an_absence(chain):
+    """The asymmetry the whole design rests on. A quoted record proves the
+    record is there; only the whole file could prove one is not."""
+    _write(chain, "https://pubpower-example.io/sellers.json",
+           '{"sellers":[{"seller_id":"9999","name":"Someone Else"}]}', 7,
+           extract=True)
+    corpus = Corpus.from_dir(chain)
+    f = ReplayFetcher(corpus)
+    import asyncio
+    asyncio.run(f.get("https://pubpower-example.io/sellers.json"))
+    assert f.served_from_extract == ["https://pubpower-example.io/sellers.json"]
+
+    text, _code = run("viewer-example.test", "t", chain)
+    assert "read as an EXTRACT, not whole" in text
+    assert "only the whole file could prove one is absent" in text
+    assert "checked and absent" not in text, \
+        "an extract must never license a checked absence"
+
+
+def test_a_whole_document_always_beats_an_extract(chain):
+    """An extract is a fallback for files that will not come back, never a
+    substitute when the real thing is available."""
+    _write(chain, "https://pubpower-example.io/sellers.json", ONE_RECORD, 7,
+           extract=True)
+    _write(chain, "https://pubpower-example.io/sellers.json",
+           json.dumps({"sellers": [
+               {"seller_id": "2397", "name": "Whole File Media Ltd"}]}), 8)
+    text, _code = run("viewer-example.test", "t", chain)
+    assert "Whole File Media Ltd" in text
+    assert "Example Downloader Media Ltd" not in text
+
+
+def test_a_replay_never_reads_the_shared_sellers_cache(chain, tmp_path):
+    """`paytrace` keeps a day-long on-disk sellers.json cache keyed by URL and
+    shared by every run on the machine. Sound for live collection, wrong here:
+    a cached copy from another case substitutes different bytes under a digest
+    computed over the cache. A 9 KB fixture left there by an unrelated test
+    surfaced as a 50-character placeholder company name in a live-looking
+    report."""
+    from paytrace import sellersjson
+    from paytrace.sellersjson import _cache_path
+
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    url = "https://storage.googleapis.com/adx-rtb-dictionaries/sellers.json"
+    original = sellersjson.SELLERS_CACHE_DIR
+    sellersjson.SELLERS_CACHE_DIR = poison
+    try:
+        (poison / _cache_path(url).name).write_text(json.dumps({"sellers": [
+            {"seller_id": "pub-0000000000000001", "name": "X" * 50}]})
+            + " " * 2000)
+        _write(chain, "https://pubpower-example.io/sellers.json", ONE_RECORD, 7,
+               extract=True)
+        text, _code = run("viewer-example.test", "t", chain)
+    finally:
+        sellersjson.SELLERS_CACHE_DIR = original
+
+    assert "X" * 20 not in text, \
+        "a replay run read another case's cached document"
+
+
+def test_a_web_page_for_an_ads_txt_path_is_an_absence_not_a_bad_document(tmp_path):
+    """A site with no app-ads.txt commonly answers that path with its own
+    single-page app. That is the site saying the file does not exist -- a
+    real, usable absence. Calling it "not the document" marked an ordinary
+    run INVALID."""
+    d = tmp_path / "f"
+    d.mkdir()
+    _write(d, "https://x.example/ads.txt", "a.example, 1, DIRECT\n", 1)
+    _write(d, "https://x.example/app-ads.txt",
+           "<!DOCTYPE html><html><body>home</body></html>", 2)
+    corpus = Corpus.from_dir(d)
+    assert not corpus.get("https://x.example/app-ads.txt")["rejected"]
+
+    text, _code = run("x.example", "t", d)
+    assert "INVALID RESULT" not in text
+    assert "NOT THE DOCUMENT" not in text

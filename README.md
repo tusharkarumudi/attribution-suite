@@ -14,7 +14,8 @@ attribution-suite --domain example.com
 
 That writes the case file for you, follows `ads.txt` → `sellers.json` →
 registries, prints the answer, and leaves a report and an evidence package in
-`./out`. Nothing else to configure.
+`./out/<domain>/`, one directory per investigation so a second search never
+overwrites the first. Nothing else to configure.
 
 The output opens with the answer:
 
@@ -46,6 +47,21 @@ sudo apt install pipx          # Debian/Ubuntu.  macOS: brew install pipx
 pipx ensurepath                # puts ~/.local/bin on PATH — open a NEW shell after this
 pipx install attribution-suite
 attribution doctor
+```
+
+That one command installs all four packages — `attribution-graph`, `paytrace`,
+`handle-correlation` and this one. `attribution doctor` lists their versions
+under `VERSIONS`, which is how you confirm it.
+
+What pipx does *not* do is put a dependency's own commands on PATH, so
+`paytrace`, `paytrace-index` and `handlecorr` are absent after a normal
+install. That is pipx working as designed, not a partial install: the packages
+are there and importable, and `attribution` does everything those commands do.
+`attribution doctor` marks them `--`, says the package is installed, and prints
+the command that exposes them if you want them:
+
+```bash
+pipx inject attribution-suite paytrace handle-correlation --include-apps
 ```
 
 ### If `pip install` just failed
@@ -243,7 +259,7 @@ attribution ask        "who operates example.com?" [--index db] [--offline]
 attribution run        --case case.yaml [--index paytrace.sqlite] [--handles h.csv]
                        [--spiderfoot scan.db] [--opencti bundle.json]
                        [--robin investigation.json] [--no-scores]
-attribution verify     ./out/evidence
+attribution verify     ./out/example.com/evidence
 attribution version
 
 attribution index build --domains tranco.txt --db paytrace.sqlite

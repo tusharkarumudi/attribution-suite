@@ -65,8 +65,19 @@ Rules that matter more here than anywhere else:
   checked", which is correct and useful. Never save an error page, a
   placeholder or your own summary in its place — it would be recorded, hashed
   and reported as what the site served.
-- **If your tool will not return the file verbatim, do not paste what it says
-  instead.** This is the common case on large files: a fetch tool answers "I
+- **If your tool will not return the file verbatim, ask for the one record
+  instead.** This is the normal case on a large `sellers.json`, and the plan
+  writes the request out for you, naming the exact `seller_id` — paste it to
+  your fetch tool and save the answer under the `..._extract-...` filename it
+  gives. That is a short quote, which fetch tools do answer, and it is how the
+  payee gets named at all.
+
+  An extract is sound for what it shows and unsound for what it does not: **a
+  quoted record proves the record is there; only the whole file could prove
+  one is absent.** The run marks every finding that came from one and will not
+  report an absence from a fragment. Fetch the whole file when you can; the
+  extract is the fallback, and a whole file always wins.
+- **Never paste what your tool says instead of the file.** This is the common case on large files: a fetch tool answers "I
   can't reproduce the full file" and offers a summary. A summary saved under
   the document's name is refused — the run reports INVALID and names the file
   — because a file that does not parse yields no records, and a report drawn
@@ -101,7 +112,7 @@ verifiable by someone else.
 
 **Always pass `--stdout` when you are reporting back to someone in a
 conversation.** It prints the whole report where you can read it and relay it.
-Without it the result is a set of files under `./out` on whatever machine ran
+Without it the result is a set of files under `./out/<domain>/` on whatever machine ran
 the tool, which the person you are answering usually cannot open — quoting
 paths at them is not an answer.
 
@@ -116,7 +127,7 @@ Useful flags, in the order they usually matter:
 | `--diagnostics` | every blocked and checked URL, when a result looks thin |
 | `--minimise` | hash identifiers, for a report handed to someone else |
 | `--stdout` | print the whole report instead of listing file paths. Use it whenever a person, not a script, is reading |
-| `--out DIR` | where the evidence package is written, default `./out` |
+| `--out DIR` | root for output, default `./out`; each domain gets `./out/<domain>/` |
 | `--egress-env` | route through this machine's proxy; needed in a sandbox |
 | `--cloaking-check` | fetch ads.txt again as a browser and compare. Catches a site serving this tool a different file from everyone else |
 
@@ -170,10 +181,19 @@ data; `--robin-query "..."` runs Robin for dark-web results and needs Tor.
 
 ## Before you start
 
-Ask the user **why** the investigation is authorised, and pass it verbatim as
-`authorization`. This is recorded in the audit trail. Do not invent one, and do
-not proceed without it — an investigation with no stated basis is not one this
-toolkit performs.
+Ask the user **why** the investigation is authorised and pass their words
+verbatim as `authorization`. It is recorded in the audit trail.
+
+**Do not compose one.** Not from the conversation, not from what you know about
+the user, and not from their employer, team or case-numbering scheme. A string
+like `"<Employer> ad-fraud investigation, case XYZ"` that the user never said is
+worse than none: the audit trail reads as attested when nothing was attested,
+and it writes an organisation's name into a record they did not author. If they
+have not said, ask. If they decline, pass nothing and report that the run is
+**unattested** — which is accurate, and is the honest state.
+
+An investigation with no stated basis is not one this toolkit performs on a
+person's behalf without saying so.
 
 ## Reporting the result — read this carefully
 

@@ -1032,3 +1032,86 @@ def test_suite_cannot_resolve_the_broken_published_paytrace():
         assert m, f"pin is not lower- and upper-bounded: paytrace{pin}"
         assert Version(m.group(1)) >= Version("2.0.1"), \
             f"floor admits the broken 2.0.0: {pin}"
+
+
+def test_the_sweep_survives_another_users_case_directory(tmp_path, monkeypatch):
+    """The temp directory is shared, and the sweep runs at server start.
+
+    `is_dir()` and `.exists()` stat, and pathlib re-raises EACCES instead of
+    answering False -- and both sat OUTSIDE the `try`, one line above it. So a
+    single `attribution-mcp-*` directory belonging to another user on the same
+    host crashed the sweep, and with it the MCP server's startup. Found by
+    running the suite as a non-root user against directories an earlier root
+    run had left in /tmp.
+    """
+    import os
+    import tempfile
+
+    from attribution_suite.mcp_server import sweep_stale_cases
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+    mine = tmp_path / "attribution-mcp-mine"
+    mine.mkdir()
+    os.utime(mine, (0, 0))               # ancient, so it is sweepable
+
+    theirs = tmp_path / "attribution-mcp-theirs"
+    theirs.mkdir()
+    os.utime(theirs, (0, 0))
+
+    real_stat = os.stat
+
+    def stat_denied(path, *a, **kw):
+        if "attribution-mcp-theirs" in str(path):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_stat(path, *a, **kw)
+
+    monkeypatch.setattr(os, "stat", stat_denied)
+
+    # It must not raise, and must still do its job on the one it can see.
+    swept = sweep_stale_cases()
+    # Undo before asserting: `Path.exists()` would otherwise hit the same
+    # patched `os.stat` and raise inside the assertion rather than the code
+    # under test.
+    monkeypatch.undo()
+    assert swept == 1
+    assert not mine.exists(), "our own stale case was not swept"
+    assert theirs.exists(), "another user's directory was touched"
+
+
+def test_the_sweep_leaves_a_case_directory_it_does_not_own(tmp_path, monkeypatch):
+    """Readable is not the same as ours.
+
+    A world-readable stale directory belonging to someone else is not this
+    process's to delete, whatever the permissions happen to allow.
+    """
+    import os
+    import tempfile
+
+    from attribution_suite.mcp_server import sweep_stale_cases
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    theirs = tmp_path / "attribution-mcp-someone-else"
+    theirs.mkdir()
+    os.utime(theirs, (0, 0))
+
+    real_stat = os.stat
+
+    class _Stat:
+        def __init__(self, st):
+            self._st = st
+            self.st_uid = st.st_uid + 1       # anybody but us
+            self.st_mtime = st.st_mtime
+        def __getattr__(self, n):
+            return getattr(self._st, n)
+
+    def stat_other_owner(path, *a, **kw):
+        st = real_stat(path, *a, **kw)
+        return _Stat(st) if "attribution-mcp-someone-else" in str(path) else st
+
+    monkeypatch.setattr(os, "stat", stat_other_owner)
+
+    swept = sweep_stale_cases()
+    monkeypatch.undo()
+    assert swept == 0
+    assert theirs.exists(), "deleted a stale directory owned by another user"

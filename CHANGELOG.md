@@ -2,6 +2,188 @@
 
 ## [Unreleased]
 
+## [2.0.25] - 2026-10-29
+
+### Narrow requests, for the files a fetch tool will not return
+
+A real investigation got one step from the answer and stopped: the ads.txt
+named `MANAGERDOMAIN` and a DIRECT seller, so the payee was a single record in
+that manager's `sellers.json` -- and the fetch tool would not return a file
+that size. The whole-file route fails on exactly the files that carry the
+answer.
+
+Asking for one record is a short quote, which fetch tools do answer. So every
+wanted `sellers.json` in the plan now carries a second route: fetch it whole,
+or quote the record. The prompt is written out ready to paste and **names the
+seller_id**, taken from the `adsystem/seller_id` identifiers the ads.txt
+collector already recorded -- no cross-package plumbing, and Google's
+off-domain file is mapped back to its ad system so that prompt names an id too.
+
+What makes it sound is an asymmetry: **a quoted record proves the record is
+there; only the whole file can prove one is absent.** So an extract can name
+the payee and can never support "checked and not found" -- anything the
+collectors recorded as a checked absence against a URL seen only in fragment
+is demoted to a block, centrally, because the collectors were right to trust
+what they were given.
+
+- **New `## Payees named by the ad systems` section.** `sellers.json` names the
+  payee and the collector records it, but with one self-published ads.txt
+  behind it nothing reaches the merge threshold -- so "Resolved entities" was
+  empty and the name appeared nowhere. A run with the answer in its graph
+  reported "no legal entity named". It is now stated for what it is: a name a
+  document gave, with its source, marked when it came from an extract, and a
+  lead until a statutory register corroborates it.
+- **A replay no longer reads the shared sellers.json cache.** `paytrace` keeps
+  a day-long on-disk cache keyed by URL across every run on the machine --
+  sound for live collection, wrong for a replay, where the supplied documents
+  ARE the evidence and a cached copy from another case substitutes different
+  bytes under a digest computed over the cache. Not hypothetical: a 9 KB
+  fixture left there by an unrelated test surfaced as a 50-character
+  placeholder company name in a live-looking report.
+- **A web page returned for an ads.txt path is an absence, not a bad
+  document.** A site with no `app-ads.txt` commonly answers that path with its
+  own single-page app, which is the site saying the file does not exist -- a
+  usable finding. Treating it as "not the document" marked an ordinary run
+  INVALID.
+
+### Authorisation must be the user's words
+
+An assistant composed `"<Employer> ad-fraud investigation, case XYZ"` from
+context and passed it as the authorisation. Nothing in the package contains
+that string; it was inferred from what the assistant knew about the user. An
+invented basis is worse than none: the audit trail reads as attested when
+nothing was attested, and it writes an organisation's name into a record the
+user did not author. The skill, the slash command and the MCP schema now say
+so explicitly -- ask, never compose, and if they decline pass nothing and
+report the run as unattested.
+
+### Every search was writing into the same `out` folder
+
+A second investigation overwrote the first one's report, evidence package and
+audit trail, because everything landed directly in `--out`. Each `--domain` run
+now gets `<out>/<domain>/`.
+
+- **A repeat of the same domain is not written over the top of the earlier
+  run.** It becomes `<domain>-2`, `-3` and so on. These directories hold an
+  evidence package whose manifest commits to the bytes retrieved and an audit
+  trail of what was asked and when; `secure_mkdir` passes `exist_ok=True` and
+  the writes truncate, so replacing one in place destroyed a record somebody
+  may already have been relying on, silently. A suffixed sibling costs a
+  directory and keeps both. "Already used" means a run's output is there, so a
+  directory someone pre-created, or one holding only the `case.yaml` this run
+  just wrote, is still used as-is.
+- **`--domain` is treated as user input, because it becomes a directory name.**
+  It is reduced to a host and filtered to hostname characters, so
+  `../../etc/passwd`, a Windows separator or drive letter, whitespace, shell
+  metacharacters and a bidirectional override cannot reach a path. A pasted URL
+  and a capitalised host resolve to the same directory as the bare domain.
+- **One code path, named in one place.** `--domains FILE` already produced
+  `<out>/<domain>/` by building the path itself, which left two places to keep
+  in step and nothing at all for a single run. The batch now hands over the
+  root and the single-run path names the directory, so both routes agree by
+  construction; a test fails if the batch starts nesting the domain twice
+  again.
+- `attribution run --case FILE` still writes straight into `--out`. A case file
+  can carry several seeds, so there is no one domain to name a directory after,
+  and whoever wrote it chose the layout.
+
+An empty `--domain` is refused where the other missing-argument cases are,
+rather than becoming a directory called `domain`.
+
+### A crash on any prefix the process may not read
+
+Reported from a real machine: six tests failed with
+`PermissionError: [Errno 13] ... /root/.local/share/pipx/venvs/attribution-suite/pipx_metadata.json`.
+
+Two separate faults, and the second is the one that mattered.
+
+**`install_mode()` could raise.** `Path.is_file()` does not swallow every
+OSError -- pathlib ignores ENOENT, ENOTDIR, EBADF and ELOOP and re-raises the
+rest -- so a prefix the process may not stat raised instead of answering "no
+marker here". This is not confined to the doctor: `install_mode` is called from
+`investigator` and `mcp_server`, so it would abort an investigation over a
+directory the process was never entitled to read. A prefix that cannot be
+stat'd now falls through to the path test, which touches no filesystem.
+
+**The tests were never hermetic.** They pointed `sys.prefix` at the literal
+`/root/.local/share/pipx/venvs/attribution-suite`. That is a real location: on
+a machine where it exists and the test user cannot read it, the check raises.
+They passed here only because this container runs as root. Every pipx case now
+builds its prefix under `tmp_path`, and the path classifier is tested through
+`_mode_from_path`, which is pure.
+
+### The MCP sweep and another user's case directory
+
+Found by running the suite as a non-root user, which is what the report above
+prompted. `sweep_stale_cases` guarded `path.stat()` with `try/except OSError`
+but left `path.is_dir()` and `(path / ".retain").exists()` outside it, one line
+above -- and both stat. The temp directory is shared, so a single
+`attribution-mcp-*` directory belonging to someone else on the same host
+crashed the sweep, and the sweep runs at MCP server start.
+
+The whole body is inside the guard now, and the sweep also skips directories it
+does not own: even where permissions would allow it, deleting another user's
+case directory is not this process's to do, and `ignore_errors=True` was hiding
+the attempt while still counting it as removed.
+
+### A correct install that read as a broken one
+
+`pipx install attribution-suite` was reported to have "never installed
+paytrace and handle-correlation and attribution graph". It had. All three are
+ordinary dependencies and pipx installs every one of them; `attribution doctor`
+lists their versions under VERSIONS, and all four modules import. What pipx
+does not do is put a *dependency's* console scripts on PATH -- it exposes only
+the apps of the package it was asked about -- so `paytrace`, `paytrace-index`
+and `handlecorr` are absent after a normal install, by design.
+
+The doctor printed that as a bare `NOT ON PATH` in a list that reads like a
+list of packages, so the only reasonable conclusion was that the install had
+failed, and the remedy was to inject packages that were already there. The
+install was never the problem; the report was.
+
+- **The three dependency commands now read `--`, with the reason.** "command
+  not exposed by pipx (the package IS installed -- see VERSIONS)", followed by
+  a short paragraph on why and the one command that exposes them anyway. They
+  no longer count against the exit code on a pipx install.
+- **Every remedy is collected into one `TO FIX -- copy and run` block** at the
+  end, each command with the reason beside it, under the detected install
+  method. Scattered one per section, the reader had to assemble them -- and the
+  line that mattered most was the one that looked like a failure.
+- **`--` and `x` now mean what the legend says.** The anthropic SDK line
+  printed `x` while the sentence under it called the fixed-rule planner "a
+  supported mode, not a failure", and the legend promises `x` blocks a run.
+  The marker follows the key: `--` with no key set, `x` when a key is set and
+  the SDK cannot be imported, which is a real inconsistency.
+- **One check per fact.** The SDK was detected twice -- a `find_spec` for the
+  remedy and a real `import` for the marker -- which disagree for a package
+  that is present but broken. The import is what the runtime does, so the
+  import decides both.
+- **MCP is reported as its two separate parts**, because they fail separately
+  and have different remedies: the `mcp` SDK (a library) and the
+  `attribution-mcp` launcher (a console script). The offline bundle is now
+  listed too, so its absence from an install is visible rather than inferred.
+- **A stale host copy of the skill is detected.** `skill --install` copies the
+  directory and an upgrade never revisits the copy, so a host can keep reading
+  rules several releases old -- and the symptom is a model applying superseded
+  rules, which looks like a model fault. Nothing in the copy records a version,
+  so the content is digested and compared against the shipped skill; a
+  mismatch reports `STALE` and the `--force` command that refreshes it.
+- **The remedy is withheld once it has been applied.** The first version of
+  this gated on pipx's `include_dependencies` flag, which is set by
+  `pipx install --include-deps` and stays False after the
+  `pipx inject --include-apps` that doctor itself prints -- so anyone who ran
+  the printed command was told to run it again, with all three commands
+  reported `ok` three lines above. Found by running the printed command
+  against a real pipx install. What is on PATH now decides, because that is
+  what the advice is about and it is directly observable.
+- **`install_mode()` finds pipx by its metadata**, not by looking for "pipx" in
+  the path. Any unusually-placed `PIPX_HOME` -- a directory called `pipxhome`
+  has no path part equal to "pipx" -- was classified as a plain venv and told
+  to run `pip install`, which a pipx venv has no pip to run.
+- README and DEPLOYMENT.md state that one install brings all four packages, and
+  that the dependency commands are deliberately not exposed. DEPLOYMENT.md's
+  console-script list contradicted the paragraph above it and no longer does.
+
 ## [2.0.24] - 2026-10-27
 
 Released as 2.0.24 rather than 2.0.23. The 2.0.23 tag exists but its CI run

@@ -28,6 +28,7 @@ that goes stale.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import ipaddress
 import json
@@ -51,6 +52,34 @@ NAME_RE = re.compile(r"^(?P<seq>\d+)-(?P<kind>[a-z0-9_]+)-(?P<host>.+?)"
 
 #: Documents whose completeness can be checked by parsing them.
 STRUCTURED = {"sellers_json", "json"}
+
+#: Suffix marking a file as an EXTRACT: a fragment quoted out of a document
+#: that was never retrieved whole.
+#:
+#: This exists because the whole-file route fails on the files that matter
+#: most. A ~700-line ads.txt or a multi-megabyte sellers.json is exactly what
+#: an assistant's fetch tool refuses to reproduce verbatim, so the payee --
+#: one record in one of those files -- stayed unreachable while everything
+#: around it was readable. Asking for that one record instead is a short quote
+#: any fetch tool will answer.
+#:
+#: What makes it sound is an asymmetry: **a quoted record proves presence; only
+#: a whole file can prove absence.** So an extract can name the payee, and can
+#: never support "checked and not found". Anything derived from one is labelled
+#: in the report, and a seller missing from an extract is reported as not
+#: checked.
+EXTRACT_SUFFIX = "_extract"
+
+
+def _served_a_web_page(body: str) -> bool:
+    """Whether the server answered with HTML instead of the file.
+
+    A site with no `app-ads.txt` commonly returns its normal page for that
+    path rather than a 404. That is an answer, not a malformed file: the file
+    does not exist. Treated as a checked absence, which is what it is.
+    """
+    head = body.lstrip()[:400].lower()
+    return head.startswith(("<!doctype", "<html", "<?xml")) or "<html" in head
 
 
 def _utc() -> str:
@@ -85,10 +114,12 @@ def url_key(url: str) -> str:
     return hashlib.sha256(url.rstrip("/").encode()).hexdigest()[:8]
 
 
-def filename_for(url: str, seq: int) -> str:
+def filename_for(url: str, seq: int, *, extract: bool = False) -> str:
     kind, host, _tail = _slug(url)
     ext = "json" if kind in STRUCTURED else "txt"
     host = re.sub(r"[^A-Za-z0-9.-]+", "-", host)[:40].strip("-")
+    if extract:
+        kind += EXTRACT_SUFFIX
     return f"{seq:02d}-{kind}-{host}-{url_key(url)}.{ext}"
 
 
@@ -97,6 +128,8 @@ class Wanted:
     """A URL a collector asked for and did not find in the corpus."""
     url: str
     collector: str = ""
+    #: For a sellers.json, the seller_id being looked up -- which is what
+    #: makes a one-record request possible to phrase.
     why: str = ""
 
 
@@ -104,6 +137,10 @@ class Wanted:
 class Corpus:
     """Documents the assistant fetched, keyed by a digest of their URL."""
     documents: dict[str, dict] = field(default_factory=dict)
+    #: Fragments quoted out of documents never retrieved whole, keyed the
+    #: same way. Kept apart from `documents` so a full file always wins and an
+    #: extract can never be mistaken for one.
+    extracts: dict[str, dict] = field(default_factory=dict)
     #: Files in the directory that are not named the way the plan asked.
     #: Reported rather than ignored: a document saved under the wrong name is
     #: invisible, and an investigation silently missing its ads.txt is worse
@@ -139,13 +176,17 @@ class Corpus:
     def add_by_key(self, key: str, body: str, *, kind: str = "",
                    name: str = "") -> None:
         """A document whose URL is not known yet; it is matched on lookup."""
-        self.documents[key] = {
+        is_extract = kind.endswith(EXTRACT_SUFFIX)
+        if is_extract:
+            kind = kind[: -len(EXTRACT_SUFFIX)]
+        target = self.extracts if is_extract else self.documents
+        target[key] = {
             "url": "", "kind": kind, "body": body, "status": 200,
             "sha256": hashlib.sha256(body.encode("utf-8", "replace")).hexdigest(),
             "bytes": len(body.encode("utf-8", "replace")),
             "retrieved_at": "", "truncated": self._looks_truncated(kind, body),
             "rejected": self._wrong_document(kind, body),
-            "file": name,
+            "file": name, "extract": is_extract,
         }
 
     def add(self, url: str, body: str, *, status: int = 200,
@@ -159,6 +200,7 @@ class Corpus:
             "retrieved_at": retrieved_at or _utc(),
             "truncated": truncated,
             "rejected": self._wrong_document(kind, body),
+            "extract": False,
         }
 
     @staticmethod
@@ -184,6 +226,12 @@ class Corpus:
         if kind in {"ads_txt", "app_ads_txt"}:
             from paytrace.adstxt import parse
 
+            if _served_a_web_page(body):
+                # Not a wrong document -- the file does not exist. A site that
+                # answers /app-ads.txt with its own single-page app is saying
+                # so, and that is a real, usable absence. Calling it "not the
+                # document" marked an ordinary run INVALID.
+                return ""
             meaningful = [ln for ln in body.splitlines()
                           if ln.strip() and not ln.lstrip().startswith("#")]
             if not meaningful:
@@ -222,7 +270,14 @@ class Corpus:
         return False
 
     def get(self, url: str) -> dict | None:
-        doc = self.documents.get(url_key(url))
+        """The whole document if there is one, otherwise an extract of it.
+
+        A full file always wins: an extract is a fallback for the files a
+        fetch tool will not reproduce, never a substitute when the real thing
+        is available.
+        """
+        key = url_key(url)
+        doc = self.documents.get(key) or self.extracts.get(key)
         if doc is not None and not doc["url"]:
             # First time this document has been asked for: now its URL is
             # known, so record it for the integrity table.
@@ -263,6 +318,9 @@ class ReplayFetcher:
         self.truncated_reads: list[tuple[str, str]] = []
         #: Saved files that are not the document they are named after.
         self.rejected: list[tuple[str, str]] = []
+        #: URLs served from an EXTRACT rather than the whole document. An
+        #: absence found in one of these is "not checked", never "not found".
+        self.served_from_extract: list[str] = []
         self.count = 0
         self.tls_intercepted = ""
         # Only the attributes something actually reads off a fetcher.
@@ -286,6 +344,14 @@ class ReplayFetcher:
         if doc is None:
             self._want(url)
             return None
+        if _served_a_web_page(doc["body"]) and doc["kind"] in {
+                "ads_txt", "app_ads_txt", "sellers_json"}:
+            # The server answered with a page, so the file is not there. A
+            # checked absence, not a lost retrieval.
+            self.checked_absent.append(
+                (url, "checked and absent: the server returned a web page for "
+                      "this path, so the file does not exist"))
+            return None
         if doc["rejected"]:
             # Not served at all. Parsing it would produce zero records and the
             # run would report a confident absence for a document nobody
@@ -295,6 +361,8 @@ class ReplayFetcher:
             self.rejected.append((url, doc["rejected"]))
             return None
         self.count += 1
+        if doc.get("extract"):
+            self.served_from_extract.append(url)
         if doc["truncated"]:
             # Returned, because a partial document still yields real records,
             # but recorded so an absence found in it is never reported as
@@ -492,6 +560,78 @@ def _rank(url: str) -> tuple[int, str]:
     return 4, url
 
 
+def _annotate_seller_ids(graph, wanted: list[Wanted]) -> None:
+    """Fill in which seller_id each wanted sellers.json is being looked up for.
+
+    Taken from the graph rather than plumbed through `paytrace`: the ads.txt
+    collector has already recorded `adsystem/seller_id` identifiers, so the
+    answer is in hand and no cross-package change is needed to phrase a
+    one-record request.
+    """
+    from attribution_graph import IdKind
+
+    by_host: dict[str, list[str]] = {}
+    for ident in graph.identifiers.values():
+        if ident.kind is not IdKind.SELLER_ID or "/" not in ident.value:
+            continue
+        adsystem, _, seller = ident.value.partition("/")
+        by_host.setdefault(adsystem.lower().removeprefix("www."), []).append(seller)
+
+    # Several ad systems host their sellers.json off their own domain --
+    # Google's lives on storage.googleapis.com -- so the URL host does not
+    # identify the ad system. The toolkit already knows those mappings.
+    hosted_elsewhere: dict[str, str] = {}
+    try:
+        from paytrace.sellersjson import SELLERS_JSON_LOCATIONS
+
+        for adsystem, loc in SELLERS_JSON_LOCATIONS.items():
+            m = re.match(r"https?://([^/]+)", str(loc))
+            if m:
+                hosted_elsewhere.setdefault(m.group(1).lower(), adsystem.lower())
+    except Exception:                           # noqa: BLE001
+        pass
+
+    for w in wanted:
+        kind, host, _tail = _slug(w.url)
+        if kind != "sellers_json" or w.why:
+            continue
+        host = host.lower().removeprefix("www.")
+        adsystem = hosted_elsewhere.get(host, host)
+        ids = by_host.get(adsystem, [])
+        if ids:
+            w.why = ", ".join(sorted(set(ids))[:3])
+
+
+def _narrow_route(wanted: Wanted, seq: int) -> list[str]:
+    """The fallback to offer when the whole file will not come back.
+
+    This is the gap that stopped a real investigation one step from the
+    answer. The ads.txt named `MANAGERDOMAIN=pubpower.io` and the line
+    `pubpower.io, 2397, DIRECT`, so the payee was one record -- seller 2397 --
+    in PubPower's sellers.json. The fetch tool would not return that file, and
+    the run ended with the question still open.
+
+    Asking for one record is a short quote, which fetch tools do answer. So
+    every wanted document carries a second route: fetch it whole, or quote the
+    part that matters. The second route cannot prove an absence, and the
+    report says so wherever it is used.
+    """
+    kind, _host, _tail = _slug(wanted.url)
+    if kind != "sellers_json":
+        return []
+    ident = (wanted.why or "").strip()
+    target = f'"{ident}"' if ident else "<the seller_id from the ads.txt line>"
+    return [
+        "if the whole file will not come back, ask for one record instead:",
+        f'  "From {wanted.url}, return only the single entry in the '
+        f'\"sellers\" array whose seller_id is exactly {target}. '
+        'Return it as JSON, verbatim, with no other entries and nothing '
+        'added. If no such entry exists, say so and return nothing."',
+        f"  save that as: {filename_for(wanted.url, seq, extract=True)}",
+        "  wrap it as {\"sellers\": [ <the record> ]} if it is returned bare",
+    ]
+
+
 def _render_plan(fetcher: ReplayFetcher, corpus: Corpus, start: int = 1,
                  include_sensitive: bool = False,
                  held_back: list[Wanted] | None = None) -> list[str]:
@@ -525,6 +665,7 @@ def _render_plan(fetcher: ReplayFetcher, corpus: Corpus, start: int = 1,
         who = f"  (wanted by: {w.collector})" if w.collector else ""
         out.append(f"{i:2d}. {w.url}")
         out.append(f"    save as: {name}{who}")
+        out += [f"    {ln}" for ln in _narrow_route(w, i)]
     if held_back and not include_sensitive:
         out += [
             "",
@@ -553,6 +694,35 @@ def _render_plan(fetcher: ReplayFetcher, corpus: Corpus, start: int = 1,
     return out
 
 
+@contextlib.contextmanager
+def _hermetic_sellers_cache():
+    """Keep a replay run out of the shared sellers.json cache.
+
+    `paytrace` keeps a day-long on-disk cache of large sellers.json files,
+    keyed by URL and shared by every run on the machine. That is a sound
+    optimisation for live collection -- one download a day instead of one per
+    account, and the report records the copy's age -- and it is wrong here.
+
+    In a replay the supplied documents ARE the evidence. A cached copy from
+    some other case silently substitutes different bytes, and the digest in
+    the report is then computed over the cache rather than over what the
+    analyst handed in. This was not hypothetical: a 9 KB fixture left in the
+    cache by an unrelated test turned up as a 50-character placeholder company
+    name in a live-looking report.
+    """
+    import tempfile
+
+    from paytrace import sellersjson
+
+    original = sellersjson.SELLERS_CACHE_DIR
+    with tempfile.TemporaryDirectory(prefix="attribution-replay-") as tmp:
+        sellersjson.SELLERS_CACHE_DIR = Path(tmp)
+        try:
+            yield
+        finally:
+            sellersjson.SELLERS_CACHE_DIR = original
+
+
 def run(domain: str, authorization: str, directory: str | Path | None = None,
         *, minimize: bool = False, show_scores: bool = True,
         include_sensitive: bool = False) -> tuple[str, int]:
@@ -562,7 +732,8 @@ def run(domain: str, authorization: str, directory: str | Path | None = None,
 
     corpus = Corpus.from_dir(directory) if directory else Corpus()
     scope = build_scope(domain, authorization, minimize=minimize)
-    graph, result, fetcher, link_report = asyncio.run(_collect(corpus, scope))
+    with _hermetic_sellers_cache():
+        graph, result, fetcher, link_report = asyncio.run(_collect(corpus, scope))
 
     # Stop when the payment chain is complete, not when every corroborating
     # source has been exhausted. There is always another register to try, so
@@ -578,6 +749,7 @@ def run(domain: str, authorization: str, directory: str | Path | None = None,
     blocking = [w for w in pending if _rank(w.url)[0] < ESSENTIAL_RANK]
 
     if blocking:
+        _annotate_seller_ids(graph, blocking)
         fetcher.wanted = blocking
         head = [
             f"# {scope.case_ref} — more documents needed",
@@ -601,6 +773,9 @@ def run(domain: str, authorization: str, directory: str | Path | None = None,
         "result_complete": not (fetcher.blocked or fetcher.truncated_reads),
         "offline_replay": True,
     }
+    if fetcher.served_from_extract:
+        status["served_from_extract"] = len(set(fetcher.served_from_extract))
+        status["result_complete"] = False
     if fetcher.rejected:
         # Not merely incomplete. A document was supplied that is not the
         # document, so the evidence set is missing pieces in a way nothing
@@ -612,14 +787,90 @@ def run(domain: str, authorization: str, directory: str | Path | None = None,
         status["gravatar_links"] = len(link_report.matched)
     _ = allowed
 
+    # An extract cannot establish an absence. Whatever the collectors recorded
+    # as "checked and absent" against a URL we only ever saw a fragment of is
+    # demoted here -- that phrase is a finding, and a fragment cannot support
+    # one. Done centrally rather than threaded through every collector,
+    # because the collectors are correct: they were told the document was the
+    # document.
+    if fetcher.served_from_extract:
+        seen = set(fetcher.served_from_extract)
+        kept = []
+        for url, why in fetcher.checked_absent:
+            if url in seen:
+                fetcher.blocked.append(
+                    (url, "an extract of this document was supplied, not the "
+                          "document: the record asked for is not in the "
+                          "fragment, which is NOT the same as not being in the "
+                          "file"))
+            else:
+                kept.append((url, why))
+        fetcher.checked_absent[:] = kept
+
     optional = [w for w in pending if _rank(w.url)[0] >= ESSENTIAL_RANK]
+    _annotate_seller_ids(graph, optional)
     if optional:
         status["result_complete"] = False
 
     body = report(graph, result, scope, show_scores=show_scores, status=status)
     notes = _integrity_notes(corpus, fetcher)
+    payees = _payees(graph, fetcher)
     tail = _optional_section(optional, len(corpus.documents))
-    return "\n".join([*notes, "", body, *tail]), 0
+    return "\n".join([*notes, "", body, *payees, *tail]), 0
+
+
+def _payees(graph, fetcher) -> list[str]:
+    """Who the ad systems say they pay, named, before anything resolves.
+
+    The single line a reader wants, and it was missing. `sellers.json` names
+    the payee and the collector records it as a `legal_name` claim, but with
+    one self-published ads.txt behind it nothing reaches the merge threshold,
+    so "Resolved entities" was empty and the name appeared nowhere -- a run
+    that had the answer in the graph reported "no legal entity named".
+
+    Stated as what it is: a name a document gave, with its source. Not a
+    resolved entity, and still a lead until a statutory register corroborates
+    it.
+    """
+    from attribution_graph import Identifier, IdKind, Predicate
+
+    rows: list[tuple[str, str, str, str, bool]] = []
+    extracted = set(fetcher.served_from_extract)
+    for c in graph.claims:
+        if c.predicate is not Predicate.LEGAL_NAME:
+            continue
+        if not isinstance(c.subject, Identifier) or \
+                c.subject.kind is not IdKind.SELLER_ID:
+            continue
+        name = c.object.value if isinstance(c.object, Identifier) else str(c.object)
+        kind = (c.object.kind.value if isinstance(c.object, Identifier)
+                else "unknown")
+        rows.append((c.subject.value, name, kind,
+                     (c.raw or {}).get("declared_domain") or "",
+                     c.source_url in extracted))
+    if not rows:
+        return []
+
+    out = [
+        "",
+        "## Payees named by the ad systems",
+        "",
+        "| Seller account | Name declared | Kind | Declared domain | Source |",
+        "|---|---|---|---|---|",
+    ]
+    for seller, name, kind, domain, from_extract in sorted(set(rows)):
+        src = "sellers.json **extract**" if from_extract else "sellers.json"
+        out.append(f"| `{seller}` | {name} | {kind} | {domain or '—'} | {src} |")
+    out += [
+        "",
+        "This is the name a document gave, not a resolved entity: nothing here "
+        "has reached a reportable band, and a name from `sellers.json` is a "
+        "**lead until a statutory register corroborates it**. A name marked "
+        "*extract* was quoted out of a file that was never retrieved whole, "
+        "so it shows that record exists and shows nothing about the rest of "
+        "the file.",
+    ]
+    return out
 
 
 def _optional_section(optional: list[Wanted], seq: int) -> list[str]:
@@ -653,7 +904,9 @@ def _integrity_notes(corpus: Corpus, fetcher: ReplayFetcher) -> list[str]:
     rather than to what the origin served, and no vantage point was recorded.
     """
     used = [d for d in corpus.documents.values() if d["url"]]
+    used += [d for d in corpus.extracts.values() if d["url"]]
     unused = [d for d in corpus.documents.values() if not d["url"]]
+    unused += [d for d in corpus.extracts.values() if not d["url"]]
     cut = [d for d in used if d["truncated"]]
     out = [
         "> ## :: OFFLINE REPLAY — retrievals were not made by this toolkit ::",
@@ -674,11 +927,31 @@ def _integrity_notes(corpus: Corpus, fetcher: ReplayFetcher) -> list[str]:
     for d in sorted(used, key=lambda x: x["url"]):
         if d["rejected"]:
             ok = "**no — not the document**"
+        elif d.get("extract"):
+            ok = "extract only — one record"
         elif d["truncated"]:
             ok = "partial — cut short"
         else:
             ok = "yes"
         out.append(f"| `{d['url']}` | {d['bytes']} | `{d['sha256'][:16]}…` | {ok} |")
+    extracts = [d for d in used if d.get("extract")]
+    if extracts:
+        out += [
+            "",
+            f"## {len(extracts)} document(s) were read as an EXTRACT, not whole",
+            "",
+            "A fetch tool would not return these files, so one record was "
+            "quoted out of each. That is sound for what it shows and unsound "
+            "for what it does not: **a quoted record proves the record is "
+            "there; only the whole file could prove one is absent.** So a "
+            "name found this way stands as a lead, and nothing here is a "
+            "finding that something is missing. The digest below covers the "
+            "fragment, not the file.",
+            "",
+        ]
+        for d in extracts:
+            out.append(f"- `{d['url']}` — extract of {d['bytes']} bytes")
+
     bad = [d for d in used if d["rejected"]]
     if bad:
         out += [
